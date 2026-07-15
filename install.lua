@@ -3,10 +3,10 @@
 --               install master   (on the master computer)
 --
 -- Downloads straight from GitHub over the in-game http API.
--- After pushing this repo to GitHub, update BASE below to match
--- your username/repo/branch.
+-- Must be the RAW host (github.com serves HTML, not file contents):
+--   https://raw.githubusercontent.com/<user>/<repo>/<branch>
 
-local BASE = "https://github.com/EvodiAaron/World-Breaker-2/World-Breaker-2/tree/main"
+local BASE = "https://raw.githubusercontent.com/EvodiAaron/World-Breaker-2/main"
 
 local SETS = {
   turtle = {
