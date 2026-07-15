@@ -6,7 +6,7 @@
 -- After pushing this repo to GitHub, update BASE below to match
 -- your username/repo/branch.
 
-local BASE = "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/World-Breaker-2/main"
+local BASE = "https://github.com/EvodiAaron/World-Breaker-2/World-Breaker-2"
 
 local SETS = {
   turtle = {
