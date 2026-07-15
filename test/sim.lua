@@ -716,6 +716,25 @@ end
 check(dug12, "strip completed through the lava")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 13: torches enabled but none aboard ----------
+print("scenario: PLACE_TORCHES on with no torches -> a single warning")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+logClear()
+runWB2("set", "PLACE_TORCHES", "true")
+runWB2("set", "TORCH_INTERVAL", "2")
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "4")
+check(logHas("no torches aboard"), "missing-torch warning raised")
+local warns = 0
+for _, line in ipairs(logLines) do
+  if line:find("no torches aboard") then warns = warns + 1 end
+end
+check(warns == 1, "warned once, not at every torch interval")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

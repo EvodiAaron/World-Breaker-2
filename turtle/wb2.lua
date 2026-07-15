@@ -26,6 +26,8 @@ if not turtle then
   return
 end
 
+local VERSION = "1.1" -- shown on the master's info screen; bump on release
+
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
 local STATE_DIR    = "/wb2data"
@@ -195,6 +197,7 @@ local function buildStatus()
   end
   return {
     id = os.getComputerID(),
+    version = VERSION,
     label = os.getComputerLabel(),
     fuel = turtle.getFuelLevel(),
     pos = { x = pos.x, y = pos.y, z = pos.z },
@@ -1142,7 +1145,12 @@ local function runStrip()
     maintainInventory({ x = x, y = 1, z = z })
 
     if cfg.PLACE_TORCHES and (i + 1) % cfg.TORCH_INTERVAL == 0 then
-      placeTorchDown()
+      if placeTorchDown() then
+        task.torchWarned = nil
+      elseif not task.torchWarned then
+        task.torchWarned = true -- warn once, not at every interval
+        note("no torches aboard to place - restock me (or enable CRAFT_TORCHES)")
+      end
     end
 
     task.cell = i + 1

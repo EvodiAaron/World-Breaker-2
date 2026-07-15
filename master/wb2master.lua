@@ -407,6 +407,13 @@ local function infoScreen()
   print(("state: %s  %s"):format(st.state or "?", st.detail or ""))
   print(("fuel: %s   pos: %s   free slots: %s"):format(
     fmtFuel(st.fuel), fmtPos(st), tostring(st.freeSlots or "?")))
+  if st.version then
+    setColor(colors.lightGray)
+    print("code v" .. st.version)
+  else
+    setColor(colors.red)
+    print("code OUTDATED - press v to push the update")
+  end
   if st.cfg then
     setColor(colors.lightGray)
     print(("torches:%s veins:%s unload:%s craft:%s/%s"):format(
