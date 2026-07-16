@@ -260,8 +260,11 @@ Optional peripherals, auto-detected on the master:
   chest full, blocked, error).
 - **Monitor** (any size, place it against the computer or connect with
   wired modems): a wall dashboard mirroring the whole fleet — one row plus
-  progress bar per turtle, recent alerts at the bottom. On an **advanced**
-  (gold) monitor you can tap a row to select that turtle on the console.
+  progress bar per turtle, recent alerts, and a row of command buttons at
+  the bottom. On an **advanced** (gold) monitor, tap a row to select that
+  turtle and tap **Return / Resume / Stop / Abort / Ping** to command it
+  directly from the wall. Actions that need typing (modes, config, quarry
+  sizes) stay on the master's own screen — monitors have no keyboard.
 
 Range note: normal wireless modems reach ~64 blocks at ground level, up to
 ~384 when both ends are high in the sky, and less during storms. For serious

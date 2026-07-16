@@ -37,8 +37,10 @@
   Optional peripherals, auto-detected:
     speaker  - chimes when a turtle reports an ore find, low bass
                when one needs attention (waiting/blocked/error)
-    monitor  - mirrors the fleet list on a wall display (tap a row
-               on an advanced monitor to select that turtle)
+    monitor  - mirrors the fleet list on a wall display. On an advanced
+               monitor, tap a row to select a turtle and tap the
+               Return/Resume/Stop/Abort/Ping buttons to command it;
+               actions that need typing stay on the master's screen
 ============================================================ ]]--
 
 local PROTO_STATUS = "wb2status"
@@ -207,7 +209,8 @@ end
 -- render a row of clickable [buttons], recording their hitboxes. Each
 -- button's hotkey letter is capitalised and highlighted (CC has no
 -- underline); a label that doesn't contain its key gets a "x:" prefix.
-local function drawButtons(y, defs)
+local function drawButtons(y, defs, registry)
+  registry = registry or buttons
   local x = 1
   for _, def in ipairs(defs) do
     local label = def.label
@@ -224,20 +227,24 @@ local function drawButtons(y, defs)
     write(label:sub(p, p))
     setColor(colors.yellow)
     write(label:sub(p + 1) .. "]")
-    table.insert(buttons, { y = y, x1 = x, x2 = x + #label + 1, ch = def.ch })
+    table.insert(registry, { y = y, x1 = x, x2 = x + #label + 1, ch = def.ch })
     x = x + #label + 3
   end
 end
 
 -- wall-monitor mirror of the fleet: every turtle gets a row plus a
--- progress bar; read-only except tap-to-select on advanced monitors
-local monRowMap = {} -- monitor row -> turtle list index
+-- progress bar. On an advanced monitor, tap a row to select and tap the
+-- command buttons; anything that needs TYPING (modes, config, sizes)
+-- stays on the master's own screen, because monitors have no keyboard.
+local monRowMap = {}  -- monitor row -> turtle list index
+local monButtons = {} -- monitor button hitboxes
 local function drawMonitor()
   if not monitor then return end
   local prev = term.redirect(monitor)
   pcall(function()
     local w, h = term.getSize()
     monRowMap = {}
+    monButtons = {}
     term.setBackgroundColor(colors.black)
     term.clear()
     term.setCursorPos(1, 1)
@@ -251,7 +258,7 @@ local function drawMonitor()
     write(string.rep("-", w))
     local row = 3
     for i, id in ipairs(order) do
-      if row > h - 4 then break end
+      if row > h - 5 then break end
       local t = turtles[id]
       local st = t.status
       local offline = (os.clock() - t.last) > STALE_AFTER
@@ -270,7 +277,7 @@ local function drawMonitor()
       monRowMap[row] = i
       row = row + 1
       local pct = taskPct(st.task)
-      if pct and row <= h - 4 then
+      if pct and row <= h - 5 then
         term.setCursorPos(3, row)
         setColor(colors.lime)
         write(bar(pct, math.min(w - 12, 30)))
@@ -284,12 +291,27 @@ local function drawMonitor()
       write("Waiting for turtle broadcasts...")
     end
     setColor(colors.gray)
-    term.setCursorPos(1, h - 3)
+    term.setCursorPos(1, h - 4)
     write(string.rep("-", w))
     setColor(colors.lightGray)
     for i = 1, 3 do
-      term.setCursorPos(1, h - 3 + i)
+      term.setCursorPos(1, h - 4 + i)
       if notes[i] then write(notes[i]:sub(1, w)) end
+    end
+    -- command buttons for the selected turtle (tap on advanced monitors);
+    -- prompt-driven actions are terminal-only, so they are not offered
+    if w >= 44 then
+      drawButtons(h, {
+        { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
+        { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
+        { label = "Ping", ch = "p" },
+      }, monButtons)
+    else
+      drawButtons(h, {
+        { label = "R", ch = "r" }, { label = "E", ch = "e" },
+        { label = "X", ch = "x" }, { label = "A", ch = "a" },
+        { label = "P", ch = "p" },
+      }, monButtons)
     end
   end)
   term.redirect(prev)
@@ -1125,11 +1147,19 @@ while true do
   elseif ev[1] == "mouse_scroll" then
     selected = math.max(1, math.min(math.max(#order, 1), selected + ev[2]))
     draw()
-  elseif ev[1] == "monitor_touch" then -- advanced monitors: tap a row to select
-    local my = ev[4]
+  elseif ev[1] == "monitor_touch" then -- advanced monitors: rows + buttons
+    local mx, my = ev[3], ev[4]
     if monRowMap[my] then
       selected = monRowMap[my]
       draw()
+    else
+      for _, b in ipairs(monButtons) do
+        if my == b.y and mx >= b.x1 and mx <= b.x2 then
+          handleChar(b.ch)
+          draw()
+          break
+        end
+      end
     end
   end
 end
