@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.2" -- shown on the master's info screen; bump on release
+local VERSION = "1.3" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1619,9 +1619,23 @@ local function handleCmd(sender, msg)
       local loader = loadstring or load
       local fn, err = loader(msg.code)
       if fn then
-        local f = fs.open("/wb2.lua", "w")
-        f.write(msg.code)
-        f.close()
+        -- write the file we are RUNNING FROM, not just /wb2.lua: a
+        -- pastebin-installed fleet runs an extensionless /wb2, which
+        -- shadows /wb2.lua on the shell path - updating only the
+        -- latter acks "updated" forever while the old code keeps
+        -- booting. Update both names and the shadow disappears.
+        local paths = { ["/wb2.lua"] = true }
+        if shell and shell.getRunningProgram then
+          local self = shell.getRunningProgram()
+          if self and self ~= "" then paths["/" .. self] = true end
+        end
+        for p in pairs(paths) do
+          local f = fs.open(p, "w")
+          if f then
+            f.write(msg.code)
+            f.close()
+          end
+        end
         reply("updated - rebooting")
         os.reboot() -- startup resumes any saved task on the new code
       else
@@ -1720,6 +1734,13 @@ if not os.getComputerLabel() then
 end
 loadConfig()
 openModems()
+
+-- two copies under different names shadow each other on the shell path
+-- and make OTA updates appear to do nothing; say so loudly
+if fs.exists("/wb2") and fs.exists("/wb2.lua") then
+  local me = (shell and shell.getRunningProgram and shell.getRunningProgram()) or "?"
+  print(("Warning: both /wb2 and /wb2.lua exist. I'm running /%s - delete the other copy."):format(me))
+end
 
 local verb = (args[1] or ""):lower()
 

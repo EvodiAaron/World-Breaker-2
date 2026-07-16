@@ -44,9 +44,16 @@ turtle resume its job after a server restart or chunk reload).
 Put `turtle/wb2.lua` on pastebin (from the pastebin website), then in-game:
 
 ```
-pastebin get <paste-code> wb2
-pastebin get <paste-code-2> startup
+pastebin get <paste-code> wb2.lua
+pastebin get <paste-code-2> startup.lua
 ```
+
+Name the files **with the `.lua` extension**, exactly as above. An
+extensionless `/wb2` *shadows* `/wb2.lua` on the shell path — the OTA
+update writes `wb2.lua`, so a turtle with a stale `/wb2` will ack every
+push and keep booting the old code anyway. (If you have such a fleet:
+`delete wb2` + `reboot` on each turtle; v1.3+ turtles also warn at boot
+and update whichever file they're actually running from.)
 
 **Option C — no http at all:** craft a disk drive + floppy, `edit` the files
 onto the floppy from any computer (or copy from another turtle with
