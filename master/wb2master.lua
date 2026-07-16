@@ -1139,61 +1139,84 @@ end
 
 -- ================= main loop =================
 
-draw()
-os.startTimer(2)
+-- Coalesced painting: a fleet's status broadcasts can arrive several
+-- times a second, and clear+redraw on every one makes the screen (and
+-- the wall monitor) strobe. Status-driven paints are rate-limited to
+-- one per half-second; keyboard/touch input still paints immediately.
+local lastPaint, dirty = 0, false
+local function paint()
+  draw()
+  lastPaint = os.clock()
+  dirty = false
+end
+local function requestPaint()
+  if os.clock() - lastPaint >= 0.5 then paint() else dirty = true end
+end
+
+paint()
+local mainTimer = os.startTimer(2)
 while true do
   local ev = { os.pullEvent() }
   if ev[1] == "rednet_message" then
-    if ingest(ev[2], ev[3], ev[4]) then
-      draw()
-    end
+    if ingest(ev[2], ev[3], ev[4]) then requestPaint() end
   elseif ev[1] == "modem_message" then
-    recordDistance(ev) -- the matching rednet_message triggers the redraw
+    recordDistance(ev) -- painted with the matching rednet_message
   elseif ev[1] == "timer" then
-    draw()
-    os.startTimer(2)
+    -- ONLY the heartbeat may repaint-and-rearm here. The info screen,
+    -- menus and the v-push collector leave stray timers behind; rearming
+    -- on those spawned an extra heartbeat each time, and the redraws
+    -- multiplied until the screen flickered constantly.
+    if ev[2] == mainTimer then
+      paint() -- periodic repaint keeps offline flags honest
+      mainTimer = os.startTimer(2)
+    end
   elseif ev[1] == "key" then
     local key = ev[2]
     if key == keys.up then
       selected = math.max(1, selected - 1)
-      draw()
+      paint()
     elseif key == keys.down then
       selected = math.min(math.max(#order, 1), selected + 1)
-      draw()
+      paint()
     end
   elseif ev[1] == "char" then
     handleChar(ev[2])
-    draw()
+    paint()
+    mainTimer = os.startTimer(2) -- a menu's own loop may have eaten the heartbeat
   elseif ev[1] == "mouse_click" then -- advanced computers only
     local mx, my = ev[3], ev[4]
     if rowMap[my] then
       selected = rowMap[my]
-      draw()
+      paint()
     else
       for _, b in ipairs(buttons) do
         if my == b.y and mx >= b.x1 and mx <= b.x2 then
           handleChar(b.ch)
-          draw()
+          paint()
+          mainTimer = os.startTimer(2)
           break
         end
       end
     end
   elseif ev[1] == "mouse_scroll" then
     selected = math.max(1, math.min(math.max(#order, 1), selected + ev[2]))
-    draw()
+    paint()
   elseif ev[1] == "monitor_touch" then -- advanced monitors: rows + buttons
     local mx, my = ev[3], ev[4]
     if monRowMap[my] then
       selected = monRowMap[my]
-      draw()
+      paint()
     else
       for _, b in ipairs(monButtons) do
         if my == b.y and mx >= b.x1 and mx <= b.x2 then
           handleChar(b.ch)
-          draw()
+          paint()
+          mainTimer = os.startTimer(2)
           break
         end
       end
     end
   end
+  -- pending status changes get painted at the next opportunity
+  if dirty and os.clock() - lastPaint >= 0.5 then paint() end
 end
