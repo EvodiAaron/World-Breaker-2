@@ -5,19 +5,30 @@
   Requires a wireless (or ender) modem on any side.
   Turtles announce themselves automatically — no enrolment step.
 
-  Keys:
+  Keys (the highlighted letter on each button is its hotkey):
     up/down     select a turtle
+    m  modes menu: quarry / strip / multi-quarry / goto
     q  start a quarry        s  start a strip mine
     g  go to coordinates     r  return home & unload
     e  resume paused task    x  stop (pause) in place
     a  abort task            t  toggle torch placement
-    u  cycle unload mode     i  full info for selection
-    p  ping selection        m  tiled quarry (split across idle turtles)
+    u  cycle unload mode     i  full info for selection (updates live)
+    p  ping selection
     c  config menu: every optional feature of the selection
     Shift+C  fleet config menu: same, applied to ALL turtles
     l  lock/unlock selection to this master
     v  push /wb2.lua to all turtles (over-the-air update)
     Shift+X / Shift+R / Shift+E   stop / recall / resume ALL turtles
+
+  The header shows this modem's estimated wireless range; a turtle
+  within 15% of that limit is drawn in orange as a warning.
+
+  Multi-quarry tiles one big quarry across several turtles: pick a
+  leader, and with GPS the followers walk to their tiles themselves
+  (digging through whatever is in the way). Without GPS, place the
+  turtles in a line - each directly beside the previous, facing the
+  same way - and they shift themselves apart. Nobody mines until
+  every turtle has reported "in position".
 
   On an ADVANCED (gold) computer this is auto-detected and the
   screen is touch-enabled: click a row to select a turtle, click
@@ -53,6 +64,22 @@ local speaker = peripheral.find("speaker")
 local monitor = peripheral.find("monitor")
 if monitor then pcall(function() monitor.setTextScale(0.5) end) end
 
+-- estimated wireless range of this computer's modem: 64 blocks at ground
+-- level, growing linearly above y=96 up to 384 at the build limit. Both
+-- ends of a link count, so treat it as a rough guide (storms shrink it,
+-- ender modems ignore it entirely).
+local rangeEst = 64
+do
+  local ok, _, y = pcall(gps.locate, 1)
+  if ok and type(y) == "number" and y > 96 then
+    rangeEst = math.min(384, math.floor(64 + (y - 96) * 2))
+  end
+end
+
+-- world-heading unit vectors (E=0, S=1, W=2, N=3), same frame as turtles
+local HDX = { [0] = 1, [1] = 0, [2] = -1, [3] = 0 }
+local HDZ = { [0] = 0, [1] = 1, [2] = 0, [3] = -1 }
+
 -- audible cues: bright pling for finds, low bass for a turtle in trouble
 local function chime(kind)
   if not speaker then return end
@@ -87,6 +114,51 @@ end
 local function pushNote(text)
   table.insert(notes, 1, text)
   while #notes > 3 do table.remove(notes) end
+end
+
+-- rednet rides on modem messages, which carry the sender's distance;
+-- remember it so the fleet list can flag turtles near the edge of range
+local function recordDistance(ev)
+  local reply, dist = ev[4], ev[6]
+  if type(reply) == "number" and type(dist) == "number" and turtles[reply] then
+    turtles[reply].dist = dist
+  end
+end
+
+local function nearRangeEdge(t)
+  return t.dist ~= nil and t.dist >= rangeEst * 0.85
+end
+
+-- absorb an incoming status/note message into the turtle table (used by
+-- the main loop and by every screen that runs its own event loop)
+local function ingest(sender, msg, proto)
+  if proto ~= PROTO_STATUS or type(msg) ~= "table" then return false end
+  if msg.kind == "note" then
+    pushNote(("#%d %s: %s"):format(msg.id or sender, msg.label or "", msg.text or ""))
+  elseif msg.kind == "ready" then
+    -- a mustering turtle reached its multi-quarry tile
+    pushNote(("#%d %s: in position"):format(msg.id or sender, msg.label or ""))
+  else
+    local prev = turtles[sender]
+    local prevNote = prev and prev.shownNote
+    local prevState = prev and prev.status.state
+    local prevDist = prev and prev.dist
+    turtles[sender] = { status = msg, last = os.clock(), shownNote = prevNote, dist = prevDist }
+    refreshOrder()
+    -- surface fresh turtle notes (ore alerts, crafting reports, ...)
+    if msg.note and msg.note ~= "" and msg.note ~= prevNote then
+      turtles[sender].shownNote = msg.note
+      pushNote(("#%d: %s"):format(sender, msg.note))
+      if msg.note:find("found") then chime("alert") end
+    end
+    -- a turtle just got stuck or ran dry: make it audible
+    if msg.state ~= prevState
+       and (msg.state == "waiting" or msg.state == "blocked" or msg.state == "error") then
+      pushNote(("#%d needs attention: %s %s"):format(sender, msg.state, msg.detail or ""))
+      chime("warn")
+    end
+  end
+  return true
 end
 
 -- ================= drawing =================
@@ -132,15 +204,28 @@ local function bar(pct, width)
          .. ("] %2d%%"):format(math.floor(pct * 100))
 end
 
--- render a row of clickable [buttons], recording their hitboxes
+-- render a row of clickable [buttons], recording their hitboxes. Each
+-- button's hotkey letter is capitalised and highlighted (CC has no
+-- underline); a label that doesn't contain its key gets a "x:" prefix.
 local function drawButtons(y, defs)
   local x = 1
   for _, def in ipairs(defs) do
-    local label = "[" .. def.label .. "]"
+    local label = def.label
+    local p = label:lower():find(def.ch:lower(), 1, true)
+    if not p then
+      label = def.ch .. ":" .. label
+      p = 1
+    end
+    label = label:sub(1, p - 1) .. label:sub(p, p):upper() .. label:sub(p + 1)
     term.setCursorPos(x, y)
-    write(label)
-    table.insert(buttons, { y = y, x1 = x, x2 = x + #label - 1, ch = def.ch })
-    x = x + #label + 1
+    setColor(colors.yellow)
+    write("[" .. label:sub(1, p - 1))
+    setColor(colors.white)
+    write(label:sub(p, p))
+    setColor(colors.yellow)
+    write(label:sub(p + 1) .. "]")
+    table.insert(buttons, { y = y, x1 = x, x2 = x + #label + 1, ch = def.ch })
+    x = x + #label + 3
   end
 end
 
@@ -172,6 +257,7 @@ local function drawMonitor()
       local offline = (os.clock() - t.last) > STALE_AFTER
       term.setCursorPos(1, row)
       if offline then setColor(colors.red)
+      elseif nearRangeEdge(t) then setColor(colors.orange)
       elseif i == selected then setColor(colors.white)
       else setColor(colors.lightGray) end
       local state = offline and "offline?" or (st.state or "?")
@@ -224,7 +310,8 @@ local function draw()
   else
     write(isColor and "World Breaker 2 - Master (touch)" or "World Breaker 2 - Master")
   end
-  local count = "turtles: " .. #order
+  local count = compact and ("t:" .. #order .. " ~" .. rangeEst)
+             or ("turtles: " .. #order .. "  range ~" .. rangeEst .. "m")
   term.setCursorPos(w - #count + 1, 1)
   write(count)
   setColor(colors.gray)
@@ -247,6 +334,8 @@ local function draw()
     end
     if offline then
       setColor(colors.red)
+    elseif nearRangeEdge(t) then
+      setColor(colors.orange) -- close to the edge of wireless range
     elseif i == selected then
       setColor(colors.white)
     else
@@ -308,26 +397,23 @@ local function draw()
     term.setCursorPos(1, h - 5 + i)
     if notes[i] then write(notes[i]:sub(1, w)) end
   end
-  setColor(colors.yellow)
   if compact then
     drawButtons(h - 2, {
-      { label = "Q", ch = "q" }, { label = "S", ch = "s" }, { label = "G", ch = "g" },
-      { label = "R", ch = "r" }, { label = "E", ch = "e" }, { label = "M", ch = "m" },
+      { label = "M", ch = "m" }, { label = "R", ch = "r" }, { label = "E", ch = "e" },
+      { label = "I", ch = "i" }, { label = "P", ch = "p" },
     })
     drawButtons(h - 1, {
       { label = "X", ch = "x" }, { label = "A", ch = "a" }, { label = "C", ch = "c" },
-      { label = "I", ch = "i" }, { label = "P", ch = "p" },
     })
   else
     drawButtons(h - 2, {
-      { label = "Quarry", ch = "q" }, { label = "Strip", ch = "s" },
-      { label = "Goto", ch = "g" }, { label = "Return", ch = "r" },
-      { label = "Resume", ch = "e" }, { label = "Multi", ch = "m" },
+      { label = "Modes", ch = "m" }, { label = "Return", ch = "r" },
+      { label = "Resume", ch = "e" }, { label = "Info", ch = "i" },
+      { label = "Ping", ch = "p" },
     })
     drawButtons(h - 1, {
       { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
-      { label = "Config", ch = "c" }, { label = "Info", ch = "i" },
-      { label = "Ping", ch = "p" },
+      { label = "Config", ch = "c" },
     })
   end
   setColor(colors.white)
@@ -394,9 +480,12 @@ local function drawQuarryMap(t)
   end
 end
 
+-- full detail for the selected turtle; keeps redrawing as fresh status
+-- broadcasts arrive, so the numbers update live while you watch
 local function infoScreen()
   local id = selectedId()
   if not id then return end
+  while true do
   local st = turtles[id].status
   term.setBackgroundColor(colors.black)
   term.clear()
@@ -407,6 +496,11 @@ local function infoScreen()
   print(("state: %s  %s"):format(st.state or "?", st.detail or ""))
   print(("fuel: %s   pos: %s   free slots: %s"):format(
     fmtFuel(st.fuel), fmtPos(st), tostring(st.freeSlots or "?")))
+  local dist = turtles[id].dist
+  if dist then
+    setColor(dist >= rangeEst * 0.85 and colors.orange or colors.lightGray)
+    print(("distance from master: %dm (my range ~%dm)"):format(dist, rangeEst))
+  end
   if st.version then
     setColor(colors.lightGray)
     print("code v" .. st.version)
@@ -471,107 +565,309 @@ local function infoScreen()
   end
   setColor(colors.lightGray)
   print("")
-  print("Press any key (or tap) to go back")
-  while true do
-    local e = os.pullEvent()
-    if e == "key" or e == "mouse_click" then break end
+  print("Updates live - press any key (or tap) to go back")
+  local timer = os.startTimer(2)
+  local redraw = false
+  while not redraw do
+    local ev = { os.pullEvent() }
+    if ev[1] == "rednet_message" then
+      if ingest(ev[2], ev[3], ev[4]) then redraw = true end
+    elseif ev[1] == "modem_message" then
+      recordDistance(ev)
+    elseif ev[1] == "timer" and ev[2] == timer then
+      redraw = true -- periodic refresh (staleness, distance)
+    elseif ev[1] == "key" or ev[1] == "mouse_click" or ev[1] == "monitor_touch" then
+      return
+    end
   end
+  end -- while true (redraw)
 end
 
--- split one big quarry across every idle turtle: the width is divided
--- into side-by-side tiles and each turtle quarries its own tile where
--- it stands. The turtles must be lined up in a row first (same facing,
--- each at the left edge of its tile) — the plan screen spells it out.
+-- split one big quarry across several turtles as side-by-side tiles.
+-- A LEADER anchors the quarry at its own position. With GPS the master
+-- computes every tile corner from the leader's fix and the followers
+-- walk there themselves (digging through whatever is in the way);
+-- without GPS the turtles must be placed in a line - each directly
+-- beside the previous, same facing - and shift themselves apart by
+-- counting. Nobody mines until every follower reports "in position".
 local function multiQuarry()
-  local idle = {}
+  local avail = {}
   for _, tid in ipairs(order) do
     local t = turtles[tid]
     local busy = t.status.task and not t.status.task.paused
     if (os.clock() - t.last) <= STALE_AFTER and not busy then
-      table.insert(idle, tid)
+      table.insert(avail, tid)
     end
   end
-  if #idle == 0 then
+  if #avail == 0 then
     pushNote("No idle turtles to tile across.")
     return
   end
-  local input = prompt(("tiled quarry, %d idle turtle(s) - <length> <width> [depth]: "):format(#idle))
+
+  -- pick the leader; the rest follow in id order
+  local defLeader = selectedId()
+  local isAvail = false
+  for _, tid in ipairs(avail) do if tid == defLeader then isAvail = true end end
+  if not isAvail then defLeader = avail[1] end
+  local leader = tonumber(prompt(("leader turtle id [%d]: "):format(defLeader))) or defLeader
+  local ordered, found = { leader }, false
+  for _, tid in ipairs(avail) do
+    if tid == leader then found = true else table.insert(ordered, tid) end
+  end
+  if not found then
+    pushNote(("#%d is not an idle, online turtle."):format(leader))
+    return
+  end
+
+  local input = prompt(("tiled quarry, %d turtle(s) - <length> <width> [depth]: "):format(#ordered))
   local l, w, d = input:match("^(%d+)%s+(%d+)%s*(%d*)$")
   if not l then
     pushNote("Format: <length> <width> [depth], e.g. 32 32")
     return
   end
   l, w, d = tonumber(l), tonumber(w), tonumber(d)
-  local n = math.min(#idle, w) -- never hand out a tile narrower than 1
+  local dir = prompt("width to the leader's right or left? (r/l) [r]: ")
+                :lower():sub(1, 1) == "l" and "left" or "right"
+  local vert = prompt("dig down or up? (d/u) [d]: ")
+                 :lower():sub(1, 1) == "u" and "up" or "down"
+  local side = (dir == "left") and -1 or 1
+
+  local n = math.min(#ordered, w) -- never hand out a tile narrower than 1
   local base = math.floor(w / n)
   local extra = w % n
-
-  term.setBackgroundColor(colors.black)
-  term.clear()
-  term.setCursorPos(1, 1)
-  setColor(colors.yellow)
-  print(("Tiled quarry %dx%d%s across %d turtles"):format(
-    l, w, d and (" depth " .. d) or " (to bedrock)", n))
-  print("")
-  setColor(colors.white)
   local plan = {}
   local off = 0
   for i = 1, n do
     local tw = base + (i <= extra and 1 or 0)
-    plan[i] = { id = idle[i], w = tw, off = off }
-    local st = turtles[idle[i]].status
-    print(("  #%-4d %-10s tile %d: %d wide (columns %d-%d)"):format(
-      idle[i], (st.label or ""):sub(1, 10), i, tw, off, off + tw - 1))
+    plan[i] = { id = ordered[i], w = tw, off = off }
     off = off + tw
+  end
+
+  -- ask the leader for a GPS fix + facing; no answer -> line mode
+  rednet.send(leader, { cmd = "pose" }, PROTO_CMD)
+  local pose = nil
+  local timer = os.startTimer(8)
+  while true do
+    local ev = { os.pullEvent() }
+    if ev[1] == "rednet_message" then
+      ingest(ev[2], ev[3], ev[4])
+      local msg = ev[3]
+      if ev[2] == leader and type(msg) == "table" and msg.world and msg.worldHeading then
+        pose = msg
+        break
+      end
+    elseif ev[1] == "modem_message" then
+      recordDistance(ev)
+    elseif ev[1] == "timer" and ev[2] == timer then
+      break
+    end
+  end
+
+  -- the plan, and what the player must do before saying yes
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  setColor(colors.yellow)
+  print(("Tiled quarry %dx%d%s%s across %d turtles"):format(
+    l, w, d and (" depth " .. d) or " (to bedrock/sky)",
+    vert == "up" and " upward" or "", n))
+  setColor(pose and colors.lime or colors.orange)
+  print(pose and "GPS mode: followers walk to their tiles themselves"
+             or "No GPS fix from the leader - LINE MODE")
+  print("")
+  setColor(colors.white)
+  for i, p in ipairs(plan) do
+    local st = turtles[p.id].status
+    print(("  #%-4d %-10s %s tile %d: %d wide (cols %d-%d)"):format(
+      p.id, (st.label or ""):sub(1, 10), i == 1 and "LEAD" or "    ",
+      i, p.w, p.off, p.off + p.w - 1))
   end
   setColor(colors.lightGray)
   print("")
-  print("Line the turtles up FIRST, in id order as listed:")
-  print("- all on one row, all facing the same direction")
-  print("- each standing at the LEFT column of its tile")
-  print(("  (turtle 2 stands %d blocks right of turtle 1, etc.)"):format(plan[1].w))
-  print("- each tile becomes that turtle's home: chest behind")
-  print("  it or chests aboard, as usual")
+  if pose then
+    print("Followers dig straight to their tile corners and")
+    print("wait there. Nothing is mined until every one has")
+    print("reported in position.")
+  else
+    print("Place the turtles FIRST, in the order listed:")
+    print(("- one row, each directly %s of the previous"):format(
+      dir == "left" and "LEFT" or "RIGHT"))
+    print("- all facing the same way as the leader")
+    print("- they then shift themselves to their tiles and")
+    print("  wait; mining starts when all are in position")
+  end
+  print("- each tile corner becomes that turtle's home:")
+  print("  chest behind it or chests aboard, as usual")
   print("")
   setColor(colors.white)
   write("Start now? (y/n): ")
-  local go = read()
-  if go:lower():sub(1, 1) == "y" then
-    for _, p in ipairs(plan) do
-      rednet.send(p.id, { cmd = "start", mode = "quarry", l = l, w = p.w, depth = d }, PROTO_CMD)
-    end
-    pushNote(("Tiled quarry %dx%d started on %d turtles"):format(l, w, n))
-  else
+  if read():lower():sub(1, 1) ~= "y" then
     pushNote("Tiled quarry cancelled")
+    return
+  end
+
+  -- send the followers to their tiles and wait for every "ready"
+  local waiting, nWaiting = {}, 0
+  for i = 2, n do
+    local p = plan[i]
+    local m
+    if pose then
+      local rh = (pose.worldHeading + (dir == "left" and 3 or 1)) % 4
+      m = { cmd = "muster",
+            x = pose.world.x + HDX[rh] * p.off,
+            y = pose.world.y,
+            z = pose.world.z + HDZ[rh] * p.off,
+            face = pose.worldHeading }
+    else
+      -- placed i-1 blocks beside the leader; its tile is off blocks out
+      m = { cmd = "muster", right = side * (p.off - (i - 1)) }
+    end
+    rednet.send(p.id, m, PROTO_CMD)
+    waiting[p.id] = true
+    nWaiting = nWaiting + 1
+  end
+  while nWaiting > 0 do
+    local _, hh = term.getSize()
+    term.setCursorPos(1, hh)
+    term.clearLine()
+    setColor(colors.orange)
+    write(("waiting for %d turtle(s) to reach position... (q aborts)"):format(nWaiting))
+    local ev = { os.pullEvent() }
+    if ev[1] == "rednet_message" then
+      local sender, msg = ev[2], ev[3]
+      ingest(sender, msg, ev[4])
+      if type(msg) == "table" and msg.kind == "ready" and waiting[sender] then
+        waiting[sender] = nil
+        nWaiting = nWaiting - 1
+      end
+    elseif ev[1] == "modem_message" then
+      recordDistance(ev)
+    elseif ev[1] == "char" and ev[2] == "q" then
+      for tid in pairs(waiting) do rednet.send(tid, { cmd = "abort" }, PROTO_CMD) end
+      pushNote("Tiled quarry cancelled while mustering")
+      return
+    end
+  end
+
+  -- everyone is in position: fire the actual quarries
+  for _, p in ipairs(plan) do
+    rednet.send(p.id, { cmd = "start", mode = "quarry", l = l, w = p.w,
+                        depth = d, dir = dir, vert = vert }, PROTO_CMD)
+  end
+  pushNote(("Tiled quarry %dx%d started on %d turtles"):format(l, w, n))
+end
+
+-- prompt-and-send flows shared by the hotkeys and the modes menu
+local function startQuarryPrompt()
+  local id = selectedId()
+  local input = prompt("quarry <length> <width> [depth] [left] [up]: ")
+  local nums, dir, vert = {}, nil, nil
+  for word in input:gmatch("%S+") do
+    local num = tonumber(word)
+    if num then table.insert(nums, num)
+    elseif word == "left" or word == "right" then dir = word
+    elseif word == "up" or word == "down" then vert = word end
+  end
+  if nums[1] and nums[2] then
+    send({ cmd = "start", mode = "quarry", l = nums[1], w = nums[2],
+           depth = nums[3], dir = dir, vert = vert })
+    pushNote(("#%d: quarry %dx%d requested"):format(id or -1, nums[1], nums[2]))
+  else
+    pushNote("Format: <length> <width> [depth] [left|right] [up|down]")
   end
 end
 
--- absorb an incoming status/note message into the turtle table (used by
--- both the main loop and the config menu, which has its own event loop)
-local function ingest(sender, msg, proto)
-  if proto ~= PROTO_STATUS or type(msg) ~= "table" then return false end
-  if msg.kind == "note" then
-    pushNote(("#%d %s: %s"):format(msg.id or sender, msg.label or "", msg.text or ""))
+local function startStripPrompt()
+  local id = selectedId()
+  local input = prompt("strip <length> [snakes] [left]: ")
+  local nums, dir = {}, nil
+  for word in input:gmatch("%S+") do
+    local num = tonumber(word)
+    if num then table.insert(nums, num)
+    elseif word == "left" or word == "right" then dir = word end
+  end
+  if nums[1] then
+    send({ cmd = "start", mode = "strip", len = nums[1],
+           snakes = nums[2] or 0, dir = dir })
+    pushNote(("#%d: strip %d requested"):format(id or -1, nums[1]))
   else
-    local prev = turtles[sender]
-    local prevNote = prev and prev.shownNote
-    local prevState = prev and prev.status.state
-    turtles[sender] = { status = msg, last = os.clock(), shownNote = prevNote }
-    refreshOrder()
-    -- surface fresh turtle notes (ore alerts, crafting reports, ...)
-    if msg.note and msg.note ~= "" and msg.note ~= prevNote then
-      turtles[sender].shownNote = msg.note
-      pushNote(("#%d: %s"):format(sender, msg.note))
-      if msg.note:find("found") then chime("alert") end
+    pushNote("Format: <length> [snakes] [left|right]")
+  end
+end
+
+local function gotoPrompt()
+  local id = selectedId()
+  local input = prompt("goto x y z (world coords; prefix 'r' for relative): ")
+  local rel, x, y, z = input:match("^(r?)%s*(-?%d+)%s+(-?%d+)%s+(-?%d+)$")
+  if x then
+    send({ cmd = "goto", x = tonumber(x), y = tonumber(y), z = tonumber(z), world = (rel ~= "r") })
+    pushNote(("#%d: goto %s,%s,%s"):format(id or -1, x, y, z))
+  else
+    pushNote("Format: x y z  (or: r x y z)")
+  end
+end
+
+-- one submenu for the ways to put turtles to work; the direct hotkeys
+-- (q/s/g) keep working from the dashboard too
+local MODES = {
+  { ch = "q", name = "Quarry",       desc = "dig out an area (selected turtle)" },
+  { ch = "s", name = "Strip",        desc = "strip tunnel, optionally snaking" },
+  { ch = "m", name = "Multi-quarry", desc = "one quarry tiled across turtles" },
+  { ch = "g", name = "Goto",         desc = "send the selection to coordinates" },
+}
+
+local function modesMenu()
+  local sel = 1
+  local function run(i)
+    local m = MODES[i]
+    if m.ch == "q" then startQuarryPrompt()
+    elseif m.ch == "s" then startStripPrompt()
+    elseif m.ch == "m" then multiQuarry()
+    elseif m.ch == "g" then gotoPrompt() end
+  end
+  while true do
+    local w, h = term.getSize()
+    term.setBackgroundColor(colors.black)
+    term.clear()
+    term.setCursorPos(1, 1)
+    setColor(colors.yellow)
+    write("Modes of operation")
+    local menuRows = {}
+    for i, m in ipairs(MODES) do
+      local row = i + 2
+      term.setCursorPos(1, row)
+      setColor(i == sel and colors.white or colors.lightGray)
+      write(((i == sel and "> " or "  ") .. m.ch .. "  " ..
+        ("%-12s"):format(m.name) .. " " .. m.desc):sub(1, w))
+      menuRows[row] = i
     end
-    -- a turtle just got stuck or ran dry: make it audible
-    if msg.state ~= prevState
-       and (msg.state == "waiting" or msg.state == "blocked" or msg.state == "error") then
-      pushNote(("#%d needs attention: %s %s"):format(sender, msg.state, msg.detail or ""))
-      chime("warn")
+    term.setCursorPos(1, h)
+    setColor(colors.lightGray)
+    write(("enter/tap to choose, or the key - backspace to go back"):sub(1, w))
+
+    local ev = { os.pullEvent() }
+    if ev[1] == "rednet_message" then
+      ingest(ev[2], ev[3], ev[4])
+    elseif ev[1] == "modem_message" then
+      recordDistance(ev)
+    elseif ev[1] == "key" then
+      local k = ev[2]
+      if k == keys.up then sel = math.max(1, sel - 1)
+      elseif k == keys.down then sel = math.min(#MODES, sel + 1)
+      elseif k == keys.enter or k == keys.space then run(sel) return
+      elseif k == keys.backspace then return end
+    elseif ev[1] == "char" then
+      for i, m in ipairs(MODES) do
+        if ev[2] == m.ch then run(i) return end
+      end
+    elseif ev[1] == "mouse_click" then
+      local my = ev[4]
+      if menuRows[my] then run(menuRows[my]) return
+      else return end -- tap outside the list = back
+    elseif ev[1] == "mouse_scroll" then
+      sel = math.max(1, math.min(#MODES, sel + ev[2]))
     end
   end
-  return true
 end
 
 -- every optional feature, editable from one screen; the list-valued
@@ -581,6 +877,8 @@ local MENU_KEYS = {
   { key = "TORCH_INTERVAL", kind = "num",  desc = "blocks between torches" },
   { key = "STRIP_VEIN",     kind = "bool", desc = "chase ore veins (strip)" },
   { key = "VEIN_DEPTH",     kind = "num",  desc = "how far to chase a vein" },
+  { key = "ORE_SCAN",       kind = "bool", desc = "scanner ore homing (strip)" },
+  { key = "SCAN_INTERVAL",  kind = "num",  desc = "blocks between scans" },
   { key = "DROP_JUNK",      kind = "bool", desc = "discard cobble/dirt" },
   { key = "UNLOAD_MODE",    kind = "mode", desc = "home / chest / ender" },
   { key = "CRAFT_TORCHES",  kind = "bool", desc = "craft torches at home" },
@@ -646,9 +944,12 @@ local function configMenu(fleet)
       write(string.rep("-", w))
     end
     local menuRows = {}
+    -- window the list so every key stays reachable on short screens
+    local visible = h - 3
+    local top = math.max(0, sel - visible)
     for i, e in ipairs(MENU_KEYS) do
-      local row = i + 2
-      if row <= h - 1 then
+      local row = i + 2 - top
+      if row >= 3 and row <= h - 1 then
         term.setCursorPos(1, row)
         setColor(i == sel and colors.white or colors.lightGray)
         local v = c[e.key]
@@ -671,6 +972,8 @@ local function configMenu(fleet)
     local ev = { os.pullEvent() }
     if ev[1] == "rednet_message" then
       ingest(ev[2], ev[3], ev[4]) -- keep the shown values live
+    elseif ev[1] == "modem_message" then
+      recordDistance(ev)
     elseif ev[1] == "key" then
       local k = ev[2]
       if k == keys.up then sel = math.max(1, sel - 1)
@@ -702,32 +1005,11 @@ local function handleChar(ch)
   local st = id and turtles[id].status or nil
 
   if ch == "q" then
-    local input = prompt("quarry <length> <width> [depth]: ")
-    local l, w, d = input:match("^(%d+)%s+(%d+)%s*(%d*)$")
-    if l then
-      send({ cmd = "start", mode = "quarry", l = tonumber(l), w = tonumber(w), depth = tonumber(d) })
-      pushNote(("#%d: quarry %sx%s requested"):format(id or -1, l, w))
-    else
-      pushNote("Format: <length> <width> [depth], e.g. 16 16")
-    end
+    startQuarryPrompt()
   elseif ch == "s" then
-    local input = prompt("strip <length> [snakes]: ")
-    local len, snakes = input:match("^(%d+)%s*(%d*)$")
-    if len then
-      send({ cmd = "start", mode = "strip", len = tonumber(len), snakes = tonumber(snakes) or 0 })
-      pushNote(("#%d: strip %s requested"):format(id or -1, len))
-    else
-      pushNote("Format: <length> [snakes], e.g. 64 4")
-    end
+    startStripPrompt()
   elseif ch == "g" then
-    local input = prompt("goto x y z (world coords; prefix 'r' for relative): ")
-    local rel, x, y, z = input:match("^(r?)%s*(-?%d+)%s+(-?%d+)%s+(-?%d+)$")
-    if x then
-      send({ cmd = "goto", x = tonumber(x), y = tonumber(y), z = tonumber(z), world = (rel ~= "r") })
-      pushNote(("#%d: goto %s,%s,%s"):format(id or -1, x, y, z))
-    else
-      pushNote("Format: x y z  (or: r x y z)")
-    end
+    gotoPrompt()
   elseif ch == "r" then
     send({ cmd = "return" })
     pushNote(("#%d: return home requested"):format(id or -1))
@@ -753,7 +1035,7 @@ local function handleChar(ch)
   elseif ch == "p" then
     send({ cmd = "ping" })
   elseif ch == "m" then
-    multiQuarry()
+    modesMenu()
   elseif ch == "c" then
     configMenu(false) -- all optional features of the selected turtle
   elseif ch == "C" then
@@ -802,6 +1084,8 @@ while true do
     if ingest(ev[2], ev[3], ev[4]) then
       draw()
     end
+  elseif ev[1] == "modem_message" then
+    recordDistance(ev) -- the matching rednet_message triggers the redraw
   elseif ev[1] == "timer" then
     draw()
     os.startTimer(2)
