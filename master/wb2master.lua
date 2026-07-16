@@ -1061,15 +1061,22 @@ local function handleChar(ch)
       pushNote(("#%d: %s"):format(id or -1, value == 0 and "unlocking" or "locking to me"))
     end
   elseif ch == "v" then
-    -- push /wb2.lua from this computer to every turtle (over-the-air update)
+    -- push /wb2.lua from this computer to every turtle (over-the-air
+    -- update). NOTE: this sends the LOCAL copy - only 'install master'
+    -- refreshes it from GitHub, so say which version is going out.
     local f = fs.open("/wb2.lua", "r")
     if not f then
-      pushNote("No /wb2.lua here - copy it to this computer to push updates")
+      pushNote("No /wb2.lua here - run 'install master' to fetch it")
     else
       local code = f.readAll()
       f.close()
+      local ver = code:match('VERSION%s*=%s*"([^"]+)"')
       rednet.broadcast({ cmd = "update", code = code }, PROTO_CMD)
-      pushNote("Update pushed to ALL turtles (they reboot and resume)")
+      if ver then
+        pushNote(("Pushed wb2 v%s to ALL turtles (they reboot and resume)"):format(ver))
+      else
+        pushNote("Pushed an UNVERSIONED wb2 - run 'install master' to refresh it!")
+      end
     end
   end
 end
