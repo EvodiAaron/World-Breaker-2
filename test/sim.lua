@@ -156,7 +156,7 @@ function turtle.digDown() return digAt(tpos.x, tpos.y - 1, tpos.z) end
 local function inspectAt(x, y, z)
   local b = world[key(x, y, z)]
   if b then return true, { name = b } end
-  return false, nil
+  return false, "No block to inspect" -- CC returns a truthy STRING here
 end
 function turtle.inspect() return inspectAt(ahead()) end
 function turtle.inspectUp() return inspectAt(tpos.x, tpos.y + 1, tpos.z) end
@@ -1119,6 +1119,28 @@ runWB2("set", "STRIP_VEIN", "false")
 runWB2("strip", "2")
 check(inv[10] == nil or inv[10].name ~= nil, "nameless item no longer aboard")
 check(logHas("strip complete"), "task finished instead of crashing at the chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 28: buffer chest placed into OPEN AIR ----------
+-- the field crash "after it unloaded and turned once": facing the buffer
+-- spot, inspect on open air returns (false, "No block to inspect") - a
+-- truthy STRING second value that must never be treated as a block
+print("scenario: buffer chest placed into open air after unloading")
+resetWorld()
+fillGround(-2, 5, -2, 2, -3, 2)
+world[key(0, 0, 0)] = nil
+world[key(0, 0, -1)] = nil            -- LEFT of home is open air
+addChest(-1, 0, 0)
+inv[1] = { name = "minecraft:crafting_table", count = 1 }
+inv[2] = { name = "minecraft:coal", count = 10 }
+inv[3] = { name = "minecraft:log", count = 6 }
+inv[4] = { name = "minecraft:chest", count = 1 }
+logClear()
+runWB2("set", "CRAFT_TORCHES", "true")
+runWB2("strip", "2")
+check(world[key(0, 0, -1)] == "minecraft:chest", "buffer chest placed into the open spot")
+check(logHas("strip complete"), "no crash after the post-unload turn")
+check(countInvItem("minecraft:torch") >= 24, "crafting proceeded normally")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------

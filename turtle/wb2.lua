@@ -848,13 +848,16 @@ local function craftSession()
   face(3)
   local ok, d = turtle.inspect()
   if not (ok and isContainer(d.name)) then
-    -- no buffer chest yet: place one from our own inventory if we can
+    -- no buffer chest yet: place one from our own inventory if we can.
+    -- Careful: for open air, inspect returns (false, message-STRING),
+    -- so d alone is truthy - only trust d when ok is true.
+    local blocked = ok
     ok = false
     local slot = findSlot(isPlainChest)
     if slot then
       -- the spot is often natural rock (we ARE in a mine): dig it out,
       -- but never break something that isn't junk to make room
-      if d and isJunk(d.name) then
+      if blocked and isJunk(d.name) then
         digForwardSafe()
       end
       if not turtle.detect() then
