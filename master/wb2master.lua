@@ -23,6 +23,13 @@
   The header shows this modem's estimated wireless range; a turtle
   within 15% of that limit is drawn in orange as a warning.
 
+  Row markers: * after the state = task paused, ! = the turtle is
+  running code with no version stamp (outdated - push with v). The
+  v push reports a tally: updated / refused / silent. REFUSED almost
+  always means the turtle is locked to a different master id - clear
+  it AT the turtle with 'wb2 set MASTER_ID 0' (a lock cannot be
+  removed remotely by a master it doesn't trust).
+
   Multi-quarry tiles one big quarry across several turtles: pick a
   leader, and with GPS the followers walk to their tiles themselves
   (digging through whatever is in the way). Without GPS, place the
@@ -269,6 +276,7 @@ local function drawMonitor()
       else setColor(colors.lightGray) end
       local state = offline and "offline?" or (st.state or "?")
       if st.task and st.task.paused then state = state .. "*" end
+      if not offline and not st.version then state = state .. "!" end -- outdated code
       local pct = taskPct(st.task)
       local pctStr = pct and ("%3d%%"):format(math.floor(pct * 100)) or "    "
       write(((i == selected and "> " or "  ") ..
@@ -365,6 +373,7 @@ local function draw()
     end
     local state = offline and "offline?" or (st.state or "?")
     if st.task and st.task.paused then state = state .. "*" end
+    if not offline and not st.version then state = state .. "!" end -- outdated code
     -- approximate task completion, shown against every turtle
     -- (blank for bedrock quarries, whose total depth is unknown)
     local pct = taskPct(st.task)
@@ -1093,12 +1102,37 @@ local function handleChar(ch)
       local code = f.readAll()
       f.close()
       local ver = code:match('VERSION%s*=%s*"([^"]+)"')
-      rednet.broadcast({ cmd = "update", code = code }, PROTO_CMD)
-      if ver then
-        pushNote(("Pushed wb2 v%s to ALL turtles (they reboot and resume)"):format(ver))
-      else
-        pushNote("Pushed an UNVERSIONED wb2 - run 'install master' to refresh it!")
+      if not ver then
+        pushNote("Local wb2 has NO version stamp - run 'install master' first!")
+        return
       end
+      rednet.broadcast({ cmd = "update", code = code }, PROTO_CMD)
+      -- collect the acks for a moment: individual replies scroll out of
+      -- the 3-line notes area far too fast to audit a whole fleet, and
+      -- a LOCKED turtle silently refusing updates looks like success
+      local accepted, refused = 0, 0
+      local timer = os.startTimer(4)
+      while true do
+        local ev = { os.pullEvent() }
+        if ev[1] == "rednet_message" then
+          local msg = ev[3]
+          if type(msg) == "table" and msg.kind == "note" and type(msg.text) == "string" then
+            if msg.text:find("updated") then
+              accepted = accepted + 1
+            elseif msg.text:find("locked") or msg.text:find("rejected") then
+              refused = refused + 1
+            end
+          end
+          ingest(ev[2], ev[3], ev[4])
+        elseif ev[1] == "modem_message" then
+          recordDistance(ev)
+        elseif ev[1] == "timer" and ev[2] == timer then
+          break
+        end
+      end
+      local silent = math.max(0, #order - accepted - refused)
+      pushNote(("wb2 v%s push: %d updated, %d REFUSED (locked?), %d silent"):format(
+        ver, accepted, refused, silent))
     end
   end
 end

@@ -250,8 +250,15 @@ Fleet controls (keyboard only):
   again to unlock; or on the turtle itself: `wb2 set MASTER_ID 0`.
 - **`v`** — push this computer's copy of `/wb2.lua` to every turtle
   over the air. Turtles sanity-compile the code, install it, reboot, and
-  resume their saved task on the new version. (The installer keeps a copy
-  of `wb2.lua` on the master for exactly this.)
+  resume their saved task on the new version. **`v` sends the master's
+  LOCAL copy** — run `install master` first to fetch the latest from
+  GitHub. The push then reports a tally (`wb2 v1.2 push: 5 updated,
+  2 REFUSED, 0 silent`), and turtles running unstamped old code show a
+  `!` after their state in the fleet list. REFUSED almost always means
+  the turtle is **locked to a different master ID** (e.g. the master
+  computer was replaced, changing its ID) — a lock can't be cleared
+  remotely by a master it doesn't trust, so run `wb2 set MASTER_ID 0`
+  at each affected turtle.
 
 Optional peripherals, auto-detected on the master:
 
