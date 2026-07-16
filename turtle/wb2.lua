@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.4" -- shown on the master's info screen; bump on release
+local VERSION = "1.5" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -500,6 +500,27 @@ local function face(h)
   elseif diff == 3 then turnLeft() end
 end
 
+-- another turtle looks like an ordinary block to dig; never do that -
+-- breaking a turtle pops it off the world and spills its inventory
+local function isTurtleBlock(name)
+  return pathOf(name):find("turtle") ~= nil
+end
+
+-- give a fellow turtle time to move out of the way; true once the spot
+-- is clear, false if it stayed put (treat like bedrock: route around)
+local function waitForTurtle(inspectFn)
+  for waited = 0, 15 do
+    local ok, d = inspectFn()
+    if not (ok and isTurtleBlock(d.name)) then return true end
+    if waited == 0 then
+      setStatus("waiting", "another turtle is in my way")
+    end
+    checkControl()
+    sleep(1)
+  end
+  return false
+end
+
 -- dig forward, tolerating gravel/sand columns
 local function digForwardSafe()
   scoopLava("forward")
@@ -507,10 +528,14 @@ local function digForwardSafe()
   while turtle.detect() do
     checkControl()
     local ok, d = turtle.inspect()
-    local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
-    if not turtle.dig() then return false end -- bedrock / protected
-    if ok then recordDig(d.name) end
-    if falling then sleep(0.4) end            -- let the next block land
+    if ok and isTurtleBlock(d.name) then
+      if not waitForTurtle(turtle.inspect) then return false end
+    else
+      local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
+      if not turtle.dig() then return false end -- bedrock / protected
+      if ok then recordDig(d.name) end
+      if falling then sleep(0.4) end            -- let the next block land
+    end
     tries = tries + 1
     if tries > 64 then return false end
   end
@@ -523,10 +548,14 @@ local function digUpSafe()
   while turtle.detectUp() do
     checkControl()
     local ok, d = turtle.inspectUp()
-    local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
-    if not turtle.digUp() then return false end
-    if ok then recordDig(d.name) end
-    if falling then sleep(0.4) end
+    if ok and isTurtleBlock(d.name) then
+      if not waitForTurtle(turtle.inspectUp) then return false end
+    else
+      local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
+      if not turtle.digUp() then return false end
+      if ok then recordDig(d.name) end
+      if falling then sleep(0.4) end
+    end
     tries = tries + 1
     if tries > 64 then return false end
   end
@@ -537,6 +566,9 @@ local function digDownSafe()
   scoopLava("down")
   if turtle.detectDown() then
     local ok, d = turtle.inspectDown()
+    if ok and isTurtleBlock(d.name) then
+      return waitForTurtle(turtle.inspectDown)
+    end
     if not turtle.digDown() then return false end
     if ok then recordDig(d.name) end
   end
@@ -592,8 +624,12 @@ local function tryDown()
     checkControl()
     if turtle.detectDown() then
       local okI, d = turtle.inspectDown()
-      if not turtle.digDown() then return false end
-      if okI then recordDig(d.name) end
+      if okI and isTurtleBlock(d.name) then
+        if not waitForTurtle(turtle.inspectDown) then return false end
+      else
+        if not turtle.digDown() then return false end
+        if okI then recordDig(d.name) end
+      end
     else
       turtle.attackDown()
       sleep(0.2)

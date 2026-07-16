@@ -23,6 +23,9 @@ local rednetSent   -- every message the turtle broadcast/sent
 local shutdownWhen -- function(msg): with a modem the worker loop idles
                    -- forever, so the sim ends once a sent status matches
 local pendingShutdown
+local simEvents    -- scheduled world changes: {when = fn->bool, fn = ...};
+                   -- fired by the scheduler once `when` first returns true
+                   -- (e.g. "the blocking turtle moves away")
 
 local DXW = { [0] = 1, [1] = 0, [2] = -1, [3] = 0 }
 local DZW = { [0] = 0, [1] = 1, [2] = 0, [3] = -1 }
@@ -38,6 +41,7 @@ local function resetWorld()
   if turtle then turtle.craft = nil end
   modemSide, gpsEnabled, shutdownWhen = nil, false, nil
   rednetQueue, rednetSent, pendingShutdown = {}, {}, false
+  simEvents = {}
 end
 
 -- in CC every turtle op yields; mirroring that gives the comms coroutine
@@ -448,6 +452,12 @@ parallel = {
           if not ok then error(ev, 0) end
           if ev == "shutdown" then return end -- see shutdownWhen
           if coroutine.status(co) == "dead" then return end
+        end
+      end
+      for i = #simEvents, 1, -1 do
+        if simEvents[i].when() then
+          local e = table.remove(simEvents, i)
+          e.fn()
         end
       end
       steps = steps + 1
@@ -1054,6 +1064,45 @@ for _, s in ipairs(containers[key(-1, 0, 0)]) do
   if s.name == "minecraft:diamond_chestplate" then chestplateInChest = true end
 end
 check(chestplateInChest, "chestplate treated as loot, not as a chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 25: never dig another turtle (it moves away) ----------
+print("scenario: a fellow turtle in the tunnel is waited out, never dug")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+world[key(2, 1, 0)] = "computercraft:turtle_expanded" -- fleetmate in the path
+-- it wanders off shortly after the digger starts waiting for it
+table.insert(simEvents, {
+  when = function() return logHas("another turtle is in my way") end,
+  fn = function() world[key(2, 1, 0)] = nil end,
+})
+logClear()
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "4")
+check(logHas("another turtle is in my way"), "digger waited instead of digging")
+check(countInvItem("computercraft:turtle_expanded") == 0, "the other turtle was never broken")
+local tunnel25 = true
+for x = 1, 4 do
+  if world[key(x, 0, 0)] or world[key(x, 1, 0)] then tunnel25 = false end
+end
+check(tunnel25, "tunnel completed once the way was clear")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 26: blocking turtle never moves -> give up cleanly ----------
+print("scenario: a parked turtle that never moves is routed around, not dug")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+world[key(2, 1, 0)] = "computercraft:turtle_expanded" -- parked, forever
+logClear()
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "4")
+check(world[key(2, 1, 0)] == "computercraft:turtle_expanded", "parked turtle untouched")
+check(countInvItem("computercraft:turtle_expanded") == 0, "nothing turtle-shaped in the loot")
+check(logHas("tunnel blocked"), "task ended cleanly instead of hanging")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------

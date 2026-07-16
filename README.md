@@ -155,6 +155,11 @@ never discarded, whatever it's called.
 
 Notable behaviors, all automatic: gravel/sand columns, mobs in the way,
 and full task resume after reboot/chunk-unload via `/wb2data/state`.
+**Turtles never dig each other**: a fellow turtle in the dig path is
+waited out (~15 s, status shows "another turtle is in my way"); if it
+stays parked, the spot is treated like bedrock — routed around or
+skipped — so crossing paths in a tiled multi-quarry can't destroy a
+fleetmate and spill its inventory.
 **Bedrock is tolerated**, not fatal: a bedrock column poking into a quarry
 is skipped, cells shadowed behind it are retried from another angle on a
 second sweep, and the quarry finishes cleanly around whatever it truly
