@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.5" -- shown on the master's info screen; bump on release
+local VERSION = "1.6" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -45,8 +45,11 @@ local function listHas(tbl, val)
   return false
 end
 
--- part of a block/item name after the mod id, e.g. "iron_ore"
+-- part of a block/item name after the mod id, e.g. "iron_ore".
+-- Some modded blocks/items report NO name at all; return "" so they
+-- match nothing special and get treated as ordinary loot/rock.
 local function pathOf(name)
+  if type(name) ~= "string" then return "" end
   return name:match(":(.+)$") or name
 end
 

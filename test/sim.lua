@@ -1105,6 +1105,22 @@ check(countInvItem("computercraft:turtle_expanded") == 0, "nothing turtle-shaped
 check(logHas("tunnel blocked"), "task ended cleanly instead of hanging")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 27: an item that reports no name ----------
+-- some 1.12 modded items return a detail table with a nil name; the
+-- keep-or-drop decision at the home chest must not crash on them
+-- (field crash: "wb2.lua:50: attempt to index local 'name' (a nil value)")
+print("scenario: nameless modded item is unloaded as plain loot, no crash")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+inv[10] = { name = nil, count = 1 } -- getItemDetail -> { count = 1 } only
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "2")
+check(inv[10] == nil or inv[10].name ~= nil, "nameless item no longer aboard")
+check(logHas("strip complete"), "task finished instead of crashing at the chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then
