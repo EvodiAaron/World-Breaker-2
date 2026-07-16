@@ -7,8 +7,8 @@
 
   Usage:
     wb2                          interactive setup wizard
-    wb2 quarry <length> <width> [depth]
-    wb2 strip <length> [snakes]
+    wb2 quarry <length> <width> [depth] [left|right] [up|down]
+    wb2 strip <length> [snakes] [left|right]
     wb2 listen                   idle; wait for master commands
     wb2 resume                   resume task saved on disk
     wb2 set <KEY> <value>        change a config value
@@ -16,7 +16,9 @@
     wb2 reset                    clear saved task + config
 
   Orientation: "length" is forward from the turtle, "width" is to
-  the turtle's RIGHT. The turtle's starting block is home; put a
+  the turtle's RIGHT (or LEFT with the left option). The turtle sits
+  INSIDE the top corner block of the quarry: its own layer counts as
+  layer 1 of the requested depth. Its starting block is home; put a
   chest directly BEHIND it for unloading, and (optionally, for
   crafty turtles) a second chest to its LEFT as a crafting buffer.
 ============================================================ ]]--
@@ -26,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.1" -- shown on the master's info screen; bump on release
+local VERSION = "1.2" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -90,12 +92,20 @@ local cfg = {
   REFUEL_TARGET   = 1000,    -- refuel to this level when waiting at home
   VEIN_DEPTH      = 12,      -- how far to chase an ore vein (strip mode)
   STRIP_VEIN      = true,    -- strip mode: chase ore veins off the tunnel
+  ORE_SCAN        = false,   -- strip mode: home in on ores with a carried
+                             -- Plethora block scanner (needs GPS to orient)
+  SCAN_INTERVAL   = 8,       -- blocks between scans
   STATUS_INTERVAL = 5,       -- seconds between status broadcasts
   ENDER_CHEST     = "enderstorage:ender_storage",
   FUEL_ITEMS      = { "minecraft:coal", "minecraft:coal_block", "minecraft:lava_bucket" },
   JUNK            = { "minecraft:cobblestone", "minecraft:stone", "minecraft:dirt",
                       "minecraft:gravel", "minecraft:sand", "minecraft:sandstone",
                       "minecraft:netherrack", "minecraft:grass", "minecraft:flint" },
+  -- decorative stones from any mod, matched by substring (chisel:marble,
+  -- projectred-exploration:stone variants, ...); one junk category with
+  -- JUNK, all governed by the single DROP_JUNK toggle
+  JUNK_MATCH      = { "andesite", "diorite", "granite", "basalt", "marble",
+                      "limestone", "tuff", "slate" },
   ORE_EXTRA       = { "ic2:resource" },  -- valuable blocks whose names don't contain "ore"
   ORE_IGNORE      = {},                  -- blocks matching "ore" that should NOT be chased
   EXTRA_LOGS      = {},                  -- crafting logs whose names don't contain "log"
@@ -203,6 +213,9 @@ local function buildStatus()
     pos = { x = pos.x, y = pos.y, z = pos.z },
     world = worldFromRel(pos),
     heading = heading,
+    -- absolute facing (E=0 S=1 W=2 N=3), known only with GPS calibration;
+    -- the master uses it to lay out multi-turtle quarry tiles
+    worldHeading = calib and ((calib.offset + heading) % 4) or nil,
     state = statusText,
     detail = statusDetail,
     note = lastNote,
@@ -302,6 +315,11 @@ local function isBucket(name)
   return name == "minecraft:bucket" or name == "minecraft:lava_bucket"
 end
 
+-- a Plethora block scanner module (1.12 module items all share one id)
+local function isScanner(name)
+  return name == "plethora:module" or pathOf(name):find("scanner") ~= nil
+end
+
 local function isContainer(name)
   local p = pathOf(name)
   return p:find("chest") ~= nil or p:find("ender_storage") ~= nil
@@ -310,7 +328,7 @@ end
 
 local function isKeepItem(name)
   if isTorch(name) or isPlainChest(name) or isEnderChest(name) or isFuelItem(name)
-     or isCraftingTable(name) or isBucket(name) then
+     or isCraftingTable(name) or isBucket(name) or isScanner(name) then
     return true
   end
   if (cfg.CRAFT_TORCHES or cfg.CRAFT_CHESTS) and (isStick(name) or isPlanks(name) or isLog(name)) then
@@ -326,7 +344,13 @@ local function isValuable(name)
 end
 
 local function isJunk(name)
-  return listHas(cfg.JUNK, name)
+  if isValuable(name) then return false end -- never discard something ore-like
+  if listHas(cfg.JUNK, name) then return true end
+  local p = pathOf(name)
+  for _, sub in ipairs(cfg.JUNK_MATCH) do
+    if p:find(sub, 1, true) then return true end
+  end
+  return false
 end
 
 local function freeSlots()
@@ -591,8 +615,10 @@ local function tryBack()
   return ok
 end
 
--- navigate to a relative coordinate; digs through anything in the way
-local function goTo(t)
+-- navigate to a relative coordinate; digs through anything in the way.
+-- The path is a straight x-then-z line; zFirst flips the axis order,
+-- which is often enough to slip around a bedrock column.
+local function goTo(t, zFirst)
   local function stepY()
     while pos.y < t.y do if not tryUp() then return false end end
     while pos.y > t.y do if not tryDown() then return false end end
@@ -612,10 +638,12 @@ local function goTo(t)
     end
     return true
   end
+  local first, second = stepX, stepZ
+  if zFirst then first, second = stepZ, stepX end
   if t.y >= pos.y then
-    return stepY() and stepX() and stepZ() -- going up: rise first (e.g. out of the pit)
+    return stepY() and first() and second() -- going up: rise first (e.g. out of the pit)
   else
-    return stepX() and stepZ() and stepY() -- going down: travel, then descend
+    return first() and second() and stepY() -- going down: travel, then descend
   end
 end
 
@@ -773,9 +801,27 @@ local function craftSession()
   face(3)
   local ok, d = turtle.inspect()
   if not (ok and isContainer(d.name)) then
-    note("No crafting buffer chest to the LEFT of home; skipping crafting")
-    face(0)
-    return
+    -- no buffer chest yet: place one from our own inventory if we can
+    ok = false
+    local slot = findSlot(isPlainChest)
+    if slot then
+      -- the spot is often natural rock (we ARE in a mine): dig it out,
+      -- but never break something that isn't junk to make room
+      if d and isJunk(d.name) then
+        digForwardSafe()
+      end
+      if not turtle.detect() then
+        turtle.select(slot)
+        ok = turtle.place()
+        turtle.select(1)
+        if ok then note("Placed my own crafting buffer chest to the LEFT of home") end
+      end
+    end
+    if not ok then
+      note("No crafting buffer chest to the LEFT of home; skipping crafting")
+      face(0)
+      return
+    end
   end
   local swapSide = nil
   if not turtle.craft then
@@ -1031,6 +1077,121 @@ local function placeTorchDown()
   return ok
 end
 
+-- ================= ore scanning (Plethora block scanner) =================
+
+-- Swap a carried block scanner onto the pickaxe side, scan, and put the
+-- pickaxe straight back (never dig while the scanner is equipped).
+-- Returns the scanned block list, or nil.
+local function scanBlocks()
+  local slot = findSlot(isScanner)
+  if not slot then return nil end
+  local side
+  for _, s in ipairs({ "right", "left" }) do
+    if peripheral.getType(s) ~= "modem" then side = s break end
+  end
+  if not side then return nil end
+  turtle.select(slot)
+  local okEq
+  if side == "right" then okEq = turtle.equipRight() else okEq = turtle.equipLeft() end
+  if not okEq then
+    turtle.select(1)
+    return nil
+  end
+  local blocks
+  local p = peripheral.wrap(side)
+  if p and p.scan then
+    local okScan, res = pcall(p.scan)
+    if okScan and type(res) == "table" then blocks = res end
+  end
+  restoreGear(side)
+  turtle.select(1)
+  return blocks
+end
+
+-- scan around the current position, chase every ore found, then return to
+-- `back`. Scanner offsets are WORLD-axis-aligned, so GPS calibration is
+-- required to rotate them into the turtle's own frame.
+local function scanAndChase(back)
+  if not calib then
+    if task and not task.scanWarned then
+      task.scanWarned = true
+      note("ore scan needs GPS to orient - skipping scans this task")
+    end
+    return
+  end
+  local blocks = scanBlocks()
+  if not blocks then
+    if task and not task.scanWarned then
+      task.scanWarned = true
+      note("ore scan: no block scanner aboard - restock me")
+    end
+    return
+  end
+  if task then task.scanWarned = nil end
+  local targets = {}
+  local inv = (4 - calib.offset) % 4
+  for _, b in ipairs(blocks) do
+    if b.name and isValuable(b.name)
+       and not (b.x == 0 and b.y == 0 and b.z == 0) then
+      local dx, dz = rot(b.x, b.z, inv)
+      table.insert(targets, {
+        x = pos.x + dx, y = pos.y + b.y, z = pos.z + dz,
+        d = math.abs(b.x) + math.abs(b.y) + math.abs(b.z),
+      })
+    end
+  end
+  table.sort(targets, function(a, b) return a.d < b.d end)
+  for _, t in ipairs(targets) do
+    checkControl()
+    dropJunk()
+    if freeSlots() < 3 then maintainInventory() end
+    -- a chased vein may already have eaten this target; travelling there
+    -- digs it either way, and the vein chaser catches its neighbours
+    if goTo({ x = t.x, y = t.y, z = t.z }) then
+      veinCheck(cfg.VEIN_DEPTH)
+    end
+  end
+  goTo(back)
+end
+
+-- ================= restock recommendations =================
+
+-- suggest inventory items for the features currently enabled, listing
+-- only what is missing; shown at startup and when a task finishes
+local function recommendInventory()
+  local wants = {}
+  local function want(cond, have, text)
+    if cond and not have then table.insert(wants, text) end
+  end
+  local fuelled = fuelLevel() == math.huge or fuelLevel() >= cfg.REFUEL_TARGET
+  local crafting = cfg.CRAFT_TORCHES or cfg.CRAFT_CHESTS
+  want(not fuelled, findSlot(isFuelItem) ~= nil, "fuel, e.g. coal")
+  want(cfg.LAVA_REFUEL and fuelLevel() ~= math.huge,
+       findSlot(isBucket) ~= nil, "an empty bucket (LAVA_REFUEL)")
+  want(cfg.PLACE_TORCHES and not cfg.CRAFT_TORCHES,
+       findSlot(isTorch) ~= nil, "torches (PLACE_TORCHES)")
+  want(crafting and not turtle.craft,
+       findSlot(isCraftingTable) ~= nil, "a crafting table (CRAFT_*)")
+  want(crafting,
+       findSlot(function(n) return isLog(n) or isPlanks(n) end) ~= nil,
+       "logs or planks (CRAFT_*)")
+  want(cfg.CRAFT_TORCHES,
+       findSlot(function(n) return n == "minecraft:coal" end) ~= nil,
+       "coal (CRAFT_TORCHES)")
+  want(cfg.CRAFT_TORCHES,
+       findSlot(function(n) return isStick(n) or isLog(n) or isPlanks(n) end) ~= nil,
+       "sticks or wood (CRAFT_TORCHES)")
+  want(cfg.CRAFT_CHESTS or cfg.UNLOAD_MODE == "chest",
+       findSlot(isPlainChest) ~= nil, "chests (unloading/crafting)")
+  want(cfg.UNLOAD_MODE == "ender",
+       findSlot(isEnderChest) ~= nil, "an ender chest (UNLOAD_MODE ender)")
+  want(cfg.ORE_SCAN, findSlot(isScanner) ~= nil, "a block scanner (ORE_SCAN)")
+  if #wants > 0 then
+    print("Recommended for my current config:")
+    for _, t in ipairs(wants) do print("  - " .. t) end
+  end
+end
+
 -- ================= tasks =================
 
 local function finishTask(msg)
@@ -1039,6 +1200,7 @@ local function finishTask(msg)
   task = nil
   saveState()
   setStatus("done", msg or "")
+  recommendInventory()
 end
 
 -- serpentine cell index -> coordinates; length l along x, width w along z
@@ -1052,6 +1214,9 @@ end
 local function runQuarry()
   local l, w = task.l, task.w
   local cells = l * w
+  -- the turtle starts INSIDE the top corner block of the quarry volume:
+  -- its own layer is layer 1, and `depth` counts that layer too
+  local sign = (task.vert == "up") and 1 or -1  -- up-quarries mine skyward
   while true do
     checkControl()
     local topDug = task.layer * 3
@@ -1059,32 +1224,53 @@ local function runQuarry()
     local remain = task.depth and (task.depth - topDug) or 3
     local centerY, digU, digD
     if remain >= 3 then
-      centerY, digU, digD = -(topDug + 2), true, true
+      centerY = sign * (topDug + 1)           -- middle of a 3-layer slice
+      digU, digD = true, true
     elseif remain == 2 then
-      centerY, digU, digD = -(topDug + 1), false, true
+      centerY = sign * topDug                 -- near layer; dig the far one
+      digU, digD = (sign > 0), (sign < 0)
     else
-      centerY, digU, digD = -(topDug + 1), false, false
+      centerY = sign * topDug                 -- single layer, no extra digs
+      digU, digD = false, false
     end
 
     local reverse = (task.layer % 2 == 1)
+    local function mineCell(i)
+      local cx, r = cellCoord(i, l, w)
+      local cz = (task.dir == "left") and -r or r  -- width side is choosable
+      local c = { x = cx, y = centerY, z = cz }
+      if goTo(c) or goTo(c, true) then
+        if digU then digUpSafe() end
+        if digD then digDownSafe() end
+        maintainInventory(c)
+        return true
+      end
+      return false
+    end
+    local failed = {}
     while task.cell < cells do
       checkControl()
       local i = reverse and (cells - 1 - task.cell) or task.cell
-      local cx, cz = cellCoord(i, l, w)
       setStatus("quarry", ("layer %d, cell %d/%d"):format(task.layer + 1, task.cell + 1, cells))
-      if goTo({ x = cx, y = centerY, z = cz }) then
-        if digU then digUpSafe() end
-        if digD then digDownSafe() end
-        maintainInventory({ x = cx, y = centerY, z = cz })
-      else
+      if not mineCell(i) then
+        table.insert(failed, i)
         task.failures = (task.failures or 0) + 1
       end
       task.cell = task.cell + 1
       saveState()
     end
+    -- a second sweep usually reaches cells that were only shadowed
+    -- BEHIND a bedrock column on the serpentine's angle of approach
+    for _, i in ipairs(failed) do
+      checkControl()
+      if mineCell(i) then
+        task.failures = task.failures - 1
+        saveState()
+      end
+    end
 
     if (task.failures or 0) >= cells then
-      finishTask("hit bedrock")
+      finishTask("hit bedrock or the world limit")
       return
     end
     task.layer = task.layer + 1
@@ -1125,6 +1311,7 @@ local function runStrip()
     checkControl()
     local i = task.cell
     local x, z = stripCell(i, len, snakes)
+    if task.dir == "left" then z = -z end -- snaked rows on the chosen side
     setStatus("strip", ("block %d/%d"):format(i + 1, total))
     if not goTo({ x = x, y = 1, z = z }) then -- travel the upper level
       finishTask("tunnel blocked")
@@ -1140,6 +1327,10 @@ local function runStrip()
         veinCheck(cfg.VEIN_DEPTH)   -- lower level: sides, floor
         tryUp()
       end
+    end
+
+    if cfg.ORE_SCAN and (i + 1) % cfg.SCAN_INTERVAL == 0 then
+      scanAndChase({ x = x, y = 1, z = z })
     end
 
     maintainInventory({ x = x, y = 1, z = z })
@@ -1180,10 +1371,63 @@ local function runGoto()
   setStatus("idle", "arrived")
 end
 
+-- move into position for a multi-turtle quarry and report ready; mining
+-- only begins when the master follows up with a start command
+local function runMuster()
+  local master = task.master
+  if task.right ~= nil then
+    -- line mode: sidestep relative to our current facing (no GPS needed)
+    local n = task.right
+    setStatus("muster", n == 0 and "already in position"
+      or ("shifting %d %s"):format(math.abs(n), n < 0 and "left" or "right"))
+    if n ~= 0 then
+      local h = heading
+      face(n > 0 and (h + 1) % 4 or (h + 3) % 4)
+      for _ = 1, math.abs(n) do
+        if not tryForward() then
+          setStatus("blocked", "cannot reach my tile - move me by hand")
+          face(h)
+          task = nil
+          saveState()
+          return
+        end
+      end
+      face(h)
+    end
+  else
+    -- GPS mode: travel to absolute coordinates and face the given way
+    setStatus("muster", ("to %d,%d,%d"):format(task.x, task.y, task.z))
+    if not calib then pcall(calibrate) end
+    local target = calib and relFromWorld({ x = task.x, y = task.y, z = task.z })
+    if not target then
+      note("muster needs GPS - place me at my tile by hand instead")
+      task = nil
+      saveState()
+      setStatus("idle")
+      return
+    end
+    if not goTo(target) then
+      setStatus("blocked", "cannot reach my tile - move me by hand")
+      task = nil
+      saveState()
+      return
+    end
+    if task.face then face((task.face - calib.offset) % 4) end
+  end
+  task = nil
+  saveState()
+  if hasModem and master then
+    rednet.send(master, { kind = "ready", id = os.getComputerID(),
+                          label = os.getComputerLabel() }, PROTO_STATUS)
+  end
+  setStatus("ready", "in position - waiting for start")
+end
+
 local function runTask()
   if task.kind == "quarry" then runQuarry()
   elseif task.kind == "strip" then runStrip()
   elseif task.kind == "goto" then runGoto()
+  elseif task.kind == "muster" then runMuster()
   else
     note("Unknown task kind: " .. tostring(task.kind))
     task = nil
@@ -1300,17 +1544,38 @@ local function handleCmd(sender, msg)
       return
     end
     if msg.mode == "quarry" and msg.l and msg.w then
-      startTask({ kind = "quarry", l = msg.l, w = msg.w, depth = msg.depth, layer = 0, cell = 0 })
+      startTask({ kind = "quarry", l = msg.l, w = msg.w, depth = msg.depth,
+                  dir = msg.dir, vert = msg.vert, layer = 0, cell = 0 })
       reply(("starting quarry %dx%d"):format(msg.l, msg.w))
     elseif msg.mode == "strip" and msg.len then
       local snakes = msg.snakes or 0
-      startTask({ kind = "strip", len = msg.len, snakes = snakes,
+      startTask({ kind = "strip", len = msg.len, snakes = snakes, dir = msg.dir,
                   total = stripTotal(msg.len, snakes), cell = 0 })
       reply(("starting strip %d%s"):format(msg.len,
         snakes > 0 and (" x" .. (snakes + 1) .. " snaked rows") or ""))
     else
       reply("bad start parameters")
     end
+
+  elseif msg.cmd == "muster" then
+    -- multi-quarry positioning: move to the assigned tile, report ready,
+    -- and wait; the master sends start once every turtle is in place
+    if task and not task.paused then
+      reply("busy - stop me first")
+      return
+    end
+    task = { kind = "muster", x = msg.x, y = msg.y, z = msg.z,
+             face = msg.face, right = msg.right, master = sender }
+    saveState()
+    reply("mustering")
+
+  elseif msg.cmd == "pose" then
+    -- refresh GPS calibration and report back (position + world heading);
+    -- calibration steps the turtle forward, so never do it mid-task
+    if not (task and not task.paused) then
+      pcall(calibrate)
+    end
+    rednet.send(sender, buildStatus(), PROTO_STATUS)
 
   elseif msg.cmd == "goto" then
     if task and not task.paused then
@@ -1411,19 +1676,27 @@ local function wizard()
     local len = tonumber(ask("Tunnel length [64]: ", "64")) or 64
     cfg.PLACE_TORCHES = ask("Place torches? (y/n) [y]: ", "y"):lower():sub(1, 1) == "y"
     cfg.STRIP_VEIN = ask("Chase ore veins? (y/n) [y]: ", "y"):lower():sub(1, 1) == "y"
-    local snakes = 0
+    local snakes, dir = 0, nil
     if ask("Snake back and forth? (y/n) [n]: ", "n"):lower():sub(1, 1) == "y" then
       snakes = tonumber(ask("How many times to wind back? [4]: ", "4")) or 4
+      dir = ask("Snake to my right or left? (r/l) [r]: ", "r"):lower():sub(1, 1) == "l"
+            and "left" or "right"
     end
     saveConfig()
     print("(more toggles: run 'wb2 config' / 'wb2 set <KEY> <value>')")
-    return { kind = "strip", len = len, snakes = snakes,
+    return { kind = "strip", len = len, snakes = snakes, dir = dir,
              total = stripTotal(len, snakes), cell = 0 }
   else
     local l = tonumber(ask("Length (forward) [16]: ", "16")) or 16
-    local w = tonumber(ask("Width (to my right) [16]: ", "16")) or 16
-    local d = tonumber(ask("Depth (blank = to bedrock): ", ""))
-    return { kind = "quarry", l = l, w = w, depth = d, layer = 0, cell = 0 }
+    local w = tonumber(ask("Width (to my right/left) [16]: ", "16")) or 16
+    local dir = ask("Width to my right or left? (r/l) [r]: ", "r"):lower():sub(1, 1) == "l"
+                and "left" or "right"
+    local vert = ask("Dig down or up? (d/u) [d]: ", "d"):lower():sub(1, 1) == "u"
+                 and "up" or "down"
+    local d = tonumber(ask("Depth/height (blank = to bedrock/sky): ", ""))
+    print("(I count my own layer as layer 1 - I sit inside the corner block)")
+    return { kind = "quarry", l = l, w = w, depth = d,
+             dir = dir, vert = vert, layer = 0, cell = 0 }
   end
 end
 
@@ -1470,20 +1743,32 @@ elseif verb == "reset" then
 elseif verb == "quarry" then
   local l = tonumber(args[2])
   local w = tonumber(args[3])
-  local d = tonumber(args[4])
   if not (l and w) then
-    print("Usage: wb2 quarry <length> <width> [depth]")
+    print("Usage: wb2 quarry <length> <width> [depth] [left|right] [up|down]")
     return
   end
-  startTask({ kind = "quarry", l = l, w = w, depth = d, layer = 0, cell = 0 })
+  local d, dir, vert
+  for i = 4, #args do
+    local a = args[i]:lower()
+    if tonumber(a) then d = tonumber(a)
+    elseif a == "left" or a == "right" then dir = a
+    elseif a == "up" or a == "down" then vert = a end
+  end
+  startTask({ kind = "quarry", l = l, w = w, depth = d,
+              dir = dir, vert = vert, layer = 0, cell = 0 })
 elseif verb == "strip" then
   local len = tonumber(args[2])
   if not len then
-    print("Usage: wb2 strip <length> [snakes]")
+    print("Usage: wb2 strip <length> [snakes] [left|right]")
     return
   end
-  local snakes = tonumber(args[3]) or 0
-  startTask({ kind = "strip", len = len, snakes = snakes,
+  local snakes, dir = 0, nil
+  for i = 3, #args do
+    local a = args[i]:lower()
+    if tonumber(a) then snakes = tonumber(a)
+    elseif a == "left" or a == "right" then dir = a end
+  end
+  startTask({ kind = "strip", len = len, snakes = snakes, dir = dir,
               total = stripTotal(len, snakes), cell = 0 })
 elseif verb == "resume" then
   if not loadState() or not task then
@@ -1520,5 +1805,6 @@ end
 if fuelLevel() ~= math.huge and fuelLevel() < 100 then
   print(("Warning: fuel is low (%d). Put coal in my inventory - I refuel myself."):format(fuelLevel()))
 end
+recommendInventory()
 
 parallel.waitForAny(workerLoop, commsLoop, heartbeatLoop)

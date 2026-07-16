@@ -13,6 +13,17 @@ local world, files, inv, tpos, thead, fuel, labels
 local containers   -- [key] = list of {name, count} stacks (chest inventories)
 local equipment    -- what is on each turtle side
 
+-- comms mocks, opt-in per scenario (all cleared by resetWorld):
+local modemSide    -- set to a side name to give the turtle a wireless modem
+local gpsEnabled   -- gps.locate returns tpos + (100, 60, 200) when true
+local rednetQueue  -- injected commands: {when?, sender, msg, proto}; `when`
+                   -- is an optional function - the message is delivered as
+                   -- soon as it returns true (mid-run config changes etc.)
+local rednetSent   -- every message the turtle broadcast/sent
+local shutdownWhen -- function(msg): with a modem the worker loop idles
+                   -- forever, so the sim ends once a sent status matches
+local pendingShutdown
+
 local DXW = { [0] = 1, [1] = 0, [2] = -1, [3] = 0 }
 local DZW = { [0] = 0, [1] = 1, [2] = 0, [3] = -1 }
 
@@ -25,6 +36,15 @@ local function resetWorld()
   labels = {}
   equipment = { left = nil, right = "minecraft:diamond_pickaxe" }
   if turtle then turtle.craft = nil end
+  modemSide, gpsEnabled, shutdownWhen = nil, false, nil
+  rednetQueue, rednetSent, pendingShutdown = {}, {}, false
+end
+
+-- in CC every turtle op yields; mirroring that gives the comms coroutine
+-- a fair turn mid-task (needed for injected commands). Top-level calls
+-- (outside the scheduler) must not yield, hence the guard.
+local function maybeYield()
+  if coroutine.isyieldable() then coroutine.yield("op") end
 end
 
 local function addChest(x, y, z)
@@ -100,6 +120,7 @@ function turtle.refuel(n)
 end
 
 local function move(dx, dy, dz)
+  maybeYield()
   local nx, ny, nz = tpos.x + dx, tpos.y + dy, tpos.z + dz
   local b = world[key(nx, ny, nz)]
   if b and not isFluid(b) then return false end
@@ -116,6 +137,7 @@ function turtle.turnLeft() thead = (thead + 3) % 4 return true end
 function turtle.turnRight() thead = (thead + 1) % 4 return true end
 
 local function digAt(x, y, z)
+  maybeYield()
   local b = world[key(x, y, z)]
   if not b then return false end
   if b == "minecraft:bedrock" or isFluid(b) then return false end
@@ -346,9 +368,60 @@ function textutils.unserialize(s)
   return nil
 end
 
-peripheral = { getType = function() return nil end }
+peripheral = {
+  getType = function(side)
+    if modemSide and side == modemSide then return "modem" end
+    return nil
+  end,
+  -- a Plethora block scanner: works only while equipped, reports every
+  -- block within an 8-block cube as WORLD-axis offsets (like the mod)
+  wrap = function(side)
+    if equipment[side] and equipment[side]:find("scanner") then
+      return { scan = function()
+        local res = {}
+        for k, b in pairs(world) do
+          local x, y, z = k:match("^(-?%d+),(-?%d+),(-?%d+)$")
+          x, y, z = tonumber(x) - tpos.x, tonumber(y) - tpos.y, tonumber(z) - tpos.z
+          if math.abs(x) <= 8 and math.abs(y) <= 8 and math.abs(z) <= 8 then
+            table.insert(res, { x = x, y = y, z = z, name = b })
+          end
+        end
+        return res
+      end }
+    end
+    return nil
+  end,
+}
+
 rednet = {}
-gps = { locate = function() return nil end }
+function rednet.open() end
+local function recordSend(msg, proto)
+  table.insert(rednetSent, { msg = msg, proto = proto })
+  if shutdownWhen and type(msg) == "table" and shutdownWhen(msg) then
+    pendingShutdown = true
+  end
+end
+function rednet.broadcast(msg, proto) recordSend(msg, proto) end
+function rednet.send(id, msg, proto) recordSend(msg, proto) end
+function rednet.receive(proto)
+  while true do
+    for i, m in ipairs(rednetQueue) do
+      if (not m.when or m.when()) and (not proto or m.proto == proto) then
+        table.remove(rednetQueue, i)
+        return m.sender or 1, m.msg, m.proto
+      end
+    end
+    if pendingShutdown and #rednetQueue == 0 then
+      coroutine.yield("shutdown")
+    end
+    coroutine.yield("park")
+  end
+end
+
+gps = { locate = function()
+  if not gpsEnabled then return nil end
+  return 100 + tpos.x, 60 + tpos.y, 200 + tpos.z
+end }
 
 local osExtra = {
   getComputerID = function() return 7 end,
@@ -370,8 +443,9 @@ parallel = {
     while true do
       for _, co in ipairs(cos) do
         if coroutine.status(co) == "suspended" then
-          local ok, err = coroutine.resume(co)
-          if not ok then error(err, 0) end
+          local ok, ev = coroutine.resume(co)
+          if not ok then error(ev, 0) end
+          if ev == "shutdown" then return end -- see shutdownWhen
           if coroutine.status(co) == "dead" then return end
         end
       end
@@ -398,6 +472,14 @@ local function logHas(pattern)
     if line:find(pattern) then return true end
   end
   return false
+end
+
+local function countInvItem(name)
+  local total = 0
+  for i = 1, 16 do
+    if inv[i] and inv[i].name == name then total = total + inv[i].count end
+  end
+  return total
 end
 
 local failures = 0
@@ -427,7 +509,9 @@ local function fillGround(x1, x2, z1, z2, y1, y2, block)
 end
 
 -- ---------- scenario 1: quarry ----------
-print("scenario: quarry 3x2, depth 3")
+-- the turtle sits INSIDE the top corner block: its own layer is layer 1,
+-- so depth 3 spans y = 0 .. -2
+print("scenario: quarry 3x2, depth 3 (turtle inside the corner block)")
 resetWorld()
 fillGround(-3, 6, -3, 6, -6, -1)          -- ground everywhere below y=0
 world[key(-1, 0, 0)] = "minecraft:chest"  -- home chest behind the turtle
@@ -436,15 +520,15 @@ runWB2("quarry", "3", "2", "3")
 local allMined = true
 for x = 0, 2 do
   for z = 0, 1 do
-    for y = -1, -3, -1 do
+    for y = 0, -2, -1 do
       if world[key(x, y, z)] then allMined = false end
     end
   end
 end
-check(allMined, "all 18 quarry blocks removed")
+check(allMined, "all 18 quarry blocks removed (y 0..-2)")
 check(world[key(3, -1, 0)] ~= nil, "no digging beyond quarry length")
 check(world[key(0, -1, -1)] ~= nil, "no digging beyond quarry width")
-check(world[key(0, -4, 0)] ~= nil, "no digging below requested depth")
+check(world[key(0, -3, 0)] ~= nil, "no digging below requested depth")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 check(world[key(-1, 0, 0)] == "minecraft:chest", "home chest untouched")
 
@@ -546,13 +630,14 @@ print("scenario: resume quarry from saved state")
 resetWorld()
 fillGround(-3, 5, -3, 5, -6, -1)
 world[key(-1, 0, 0)] = "minecraft:chest"
--- pretend cells 0 and 1 of a 2x2 quarry were already mined before the "crash"
-world[key(0, -1, 0)] = nil world[key(0, -2, 0)] = nil world[key(0, -3, 0)] = nil
-world[key(1, -1, 0)] = nil world[key(1, -2, 0)] = nil world[key(1, -3, 0)] = nil
-tpos = { x = 1, y = -2, z = 0 }
+-- pretend cells 0 and 1 of a 2x2 quarry were already mined before the
+-- "crash" (depth 3 spans y = 0..-2; the y=0 layer was already air)
+world[key(0, -1, 0)] = nil world[key(0, -2, 0)] = nil
+world[key(1, -1, 0)] = nil world[key(1, -2, 0)] = nil
+tpos = { x = 1, y = -1, z = 0 }
 thead = 0
 files["/wb2data/state"] = textutils.serialize({
-  pos = { x = 1, y = -2, z = 0 },
+  pos = { x = 1, y = -1, z = 0 },
   heading = 0,
   task = { kind = "quarry", l = 2, w = 2, depth = 3, layer = 0, cell = 2 },
 })
@@ -560,12 +645,13 @@ runWB2("resume")
 local resumed = true
 for x = 0, 1 do
   for z = 0, 1 do
-    for y = -1, -3, -1 do
+    for y = 0, -2, -1 do
       if world[key(x, y, z)] then resumed = false end
     end
   end
 end
 check(resumed, "remaining quarry cells mined after resume")
+check(world[key(0, -3, 0)] ~= nil, "resume respected the requested depth")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home after resume")
 
 -- ---------- scenario 7: torch crafting via workbench tool-swap ----------
@@ -608,11 +694,12 @@ check(world[key(-1, 0, 0)] == "minecraft:chest", "chest placed behind home from 
 check(#containers[key(-1, 0, 0)] > 0, "loot deposited into the placed chest")
 check(countInv("minecraft:chest") == 1, "only one chest used")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+-- depth 3 spans y 0..-2 and the y=0 layer is air, so 8 ore blocks
 local savedState = textutils.unserialize(files["/wb2data/state"])
-check(savedState and savedState.haul and savedState.haul.total == 12,
-  "haul statistics: 12 blocks dug")
-check(savedState and savedState.haul.ores["minecraft:iron_ore"] == 12,
-  "haul statistics: all 12 counted as iron ore")
+check(savedState and savedState.haul and savedState.haul.total == 8,
+  "haul statistics: 8 blocks dug")
+check(savedState and savedState.haul.ores["minecraft:iron_ore"] == 8,
+  "haul statistics: all 8 counted as iron ore")
 
 -- ---------- scenario 9: low fuel -> retreat home, refuel, resume ----------
 print("scenario: low-fuel retreat home, refuel, auto-resume")
@@ -734,6 +821,222 @@ for _, line in ipairs(logLines) do
 end
 check(warns == 1, "warned once, not at every torch interval")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 14: buffer chest placed by the turtle itself ----------
+print("scenario: turtle digs out and places its own crafting buffer chest")
+resetWorld()
+fillGround(-2, 5, -2, 2, -3, 2)      -- (0,0,-1), LEFT of home, is solid stone
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)                   -- loot chest only; NO buffer chest
+inv[1] = { name = "minecraft:crafting_table", count = 1 }
+inv[2] = { name = "minecraft:coal", count = 10 }
+inv[3] = { name = "minecraft:log", count = 6 }
+inv[4] = { name = "minecraft:chest", count = 1 }
+logClear()
+runWB2("set", "CRAFT_TORCHES", "true")
+runWB2("strip", "2")
+check(world[key(0, 0, -1)] == "minecraft:chest", "buffer chest placed to the LEFT of home")
+check(logHas("Placed my own crafting buffer chest"), "self-placement announced")
+check(countInvItem("minecraft:torch") >= 24, "torches crafted using the placed buffer")
+check(countInvItem("minecraft:chest") == 0, "the carried chest was used for the buffer")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 15: quarry with the width to the LEFT ----------
+print("scenario: quarry 2x2 depth 2, width to the left")
+resetWorld()
+fillGround(-3, 6, -6, 3, -6, -1)
+world[key(-1, 0, 0)] = "minecraft:chest"
+runWB2("quarry", "2", "2", "2", "left")
+local leftMined = true
+for x = 0, 1 do
+  for z = 0, -1, -1 do
+    if world[key(x, -1, z)] then leftMined = false end
+  end
+end
+check(leftMined, "quarry dug on the LEFT side (z 0..-1)")
+check(world[key(0, -1, 1)] ~= nil, "right side untouched")
+check(world[key(0, -2, 0)] ~= nil, "no digging below depth 2 (y 0..-1)")
+check(world[key(-1, 0, 0)] == "minecraft:chest", "home chest untouched")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 16: quarry mining upward ----------
+print("scenario: quarry 2x2 height 3, upward")
+resetWorld()
+fillGround(-3, 6, -3, 6, 1, 4)       -- a solid slab overhead (y 1..4)
+world[key(-1, 0, 0)] = "minecraft:chest"
+runWB2("quarry", "2", "2", "3", "up")
+local upMined = true
+for x = 0, 1 do
+  for z = 0, 1 do
+    for y = 1, 2 do
+      if world[key(x, y, z)] then upMined = false end
+    end
+  end
+end
+check(upMined, "volume above the turtle mined (y 0..2)")
+check(world[key(0, 3, 0)] ~= nil, "no digging above the requested height")
+check(world[key(0, -1, 0)] == nil, "nothing dug below the turtle")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 17: snaking strip to the LEFT ----------
+print("scenario: snaking strip (4 long, 1 snake) to the left")
+resetWorld()
+fillGround(-2, 8, -10, 2, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+runWB2("strip", "4", "1", "left")
+local rowsLeft = true
+for _, z in ipairs({ 0, -3 }) do
+  for x = 1, 4 do
+    for y = 0, 1 do
+      if world[key(x, y, z)] then rowsLeft = false end
+    end
+  end
+end
+check(rowsLeft, "both rows dug on the LEFT (z = 0 and z = -3)")
+check(world[key(4, 0, -1)] == nil and world[key(4, 0, -2)] == nil,
+  "connector dug through the gap at the far end")
+check(world[key(2, 0, -1)] ~= nil and world[key(2, 0, -2)] ~= nil,
+  "2-block gap between rows left intact")
+check(world[key(1, 0, 1)] ~= nil, "nothing dug on the right side")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 18: config change applies mid-run ----------
+print("scenario: PLACE_TORCHES enabled over rednet MID-RUN takes effect immediately")
+resetWorld()
+modemSide = "left"
+fillGround(-2, 10, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+inv[16] = { name = "minecraft:torch", count = 16 }
+runWB2("set", "PLACE_TORCHES", "false")
+runWB2("set", "TORCH_INTERVAL", "2")
+runWB2("set", "STRIP_VEIN", "false")
+-- flip the toggle once the tunnel floor reaches x=5 (i.e. mid-task)
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 42,
+  msg = { cmd = "set", key = "PLACE_TORCHES", value = true },
+  when = function() return world[key(5, 0, 0)] == nil end })
+shutdownWhen = function(msg) return msg.state == "done" end
+runWB2("strip", "8")
+check(world[key(2, 0, 0)] ~= "minecraft:torch" and world[key(4, 0, 0)] ~= "minecraft:torch",
+  "no torches placed before the toggle arrived")
+check(world[key(6, 0, 0)] == "minecraft:torch", "torch at 6: change applied mid-run")
+check(world[key(8, 0, 0)] == "minecraft:torch", "torch at 8: change stayed applied")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 19: bedrock intrusion inside a quarry ----------
+print("scenario: quarry tolerates a bedrock column poking into it")
+resetWorld()
+fillGround(-3, 6, -3, 6, -6, -1)
+for y = -2, -6, -1 do world[key(1, y, 1)] = "minecraft:bedrock" end
+world[key(-1, 0, 0)] = "minecraft:chest"
+logClear()
+runWB2("quarry", "3", "3", "6")
+local aroundBedrock = true
+for x = 0, 2 do
+  for z = 0, 2 do
+    for y = -1, -5, -1 do
+      if not (x == 1 and z == 1 and y <= -2) then
+        if world[key(x, y, z)] then aroundBedrock = false end
+      end
+    end
+  end
+end
+check(aroundBedrock, "every reachable block mined, including cells behind the bedrock")
+check(world[key(1, -2, 1)] == "minecraft:bedrock", "the bedrock column survives")
+check(logHas("quarry complete"), "task finished cleanly despite the bedrock")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 20: Plethora block scanner ore homing ----------
+print("scenario: strip mode homes in on scanner-located ore (ORE_SCAN)")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true                       -- scanner offsets are world-aligned
+fillGround(-2, 10, -6, 2, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+world[key(4, 0, -5)] = "minecraft:diamond_ore" -- far beyond vein-chasing sight
+inv[1] = { name = "plethora:module_scanner", count = 1 }
+shutdownWhen = function(msg) return msg.state == "done" end
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("set", "ORE_SCAN", "true")
+runWB2("set", "SCAN_INTERVAL", "4")
+logClear()
+runWB2("strip", "8")
+check(world[key(4, 0, -5)] == nil, "scanner-located ore mined")
+check(logHas("diamond_ore found"), "the find was announced")
+check(countInvItem("plethora:module_scanner") == 1, "scanner back in the inventory")
+check(equipment.right == "minecraft:diamond_pickaxe", "pickaxe re-equipped after scanning")
+local tunnel20 = true
+for x = 1, 8 do
+  if world[key(x, 0, 0)] or world[key(x, 1, 0)] then tunnel20 = false end
+end
+check(tunnel20, "tunnel still completed to full length")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 21: decorative stones are junk (one toggle) ----------
+print("scenario: modded marble discarded via DROP_JUNK, hauled when off")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2, "chisel:marble")
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "4")
+local marbleInChest = 0
+for _, s in ipairs(containers[key(-1, 0, 0)]) do
+  if s.name == "chisel:marble" then marbleInChest = marbleInChest + s.count end
+end
+check(countInvItem("chisel:marble") == 0 and marbleInChest == 0,
+  "marble discarded, not hauled (DROP_JUNK on)")
+
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2, "chisel:marble")
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("set", "DROP_JUNK", "false")
+runWB2("strip", "4")
+marbleInChest = 0
+for _, s in ipairs(containers[key(-1, 0, 0)]) do
+  if s.name == "chisel:marble" then marbleInChest = marbleInChest + s.count end
+end
+check(marbleInChest + countInvItem("chisel:marble") > 0,
+  "marble hauled home with DROP_JUNK off")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 22: muster to a world position (GPS mode) ----------
+print("scenario: muster (GPS): walk to world coords, face the given heading")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+thead = 1  -- the turtle's own frame differs from the world frame
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "muster", x = 103, y = 60, z = 205, face = 2 } })
+shutdownWhen = function(msg) return msg.state == "ready" end
+runWB2("listen")
+check(tpos.x == 3 and tpos.y == 0 and tpos.z == 5, "turtle at the mustered world position")
+check(thead == 2, "turtle faces the requested world heading")
+local readySent = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.kind == "ready" then readySent = true end
+end
+check(readySent, "ready reported back to the master")
+
+-- ---------- scenario 23: muster by counting (line mode, no GPS) ----------
+print("scenario: muster (line mode): sidestep right with no GPS at all")
+resetWorld()
+modemSide = "left"
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "muster", right = 3 } })
+shutdownWhen = function(msg) return msg.state == "ready" end
+runWB2("listen")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 3, "turtle shifted 3 blocks to its right")
+check(thead == 0, "turtle back on its original facing")
+local readySent23 = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.kind == "ready" then readySent23 = true end
+end
+check(readySent23, "ready reported back to the master")
 
 -- ---------- summary ----------
 print("")
