@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.3" -- shown on the master's info screen; bump on release
+local VERSION = "1.4" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -289,8 +289,16 @@ end
 -- ================= inventory helpers =================
 
 local function isTorch(name) return name == "minecraft:torch" end
-local function isPlainChest(name) return name == "minecraft:chest" end
 local function isEnderChest(name) return name == cfg.ENDER_CHEST or name == "minecraft:ender_chest" end
+-- any mod's placeable chest counts (Quark spruce chests, iron chests,
+-- ...), but never armour ("chestplate") and never ender chests, which
+-- have their own unload path
+local function isPlainChest(name)
+  if isEnderChest(name) then return false end
+  local p = pathOf(name)
+  if p:find("chestplate") then return false end
+  return p:find("chest") ~= nil
+end
 local function isStick(name) return name == "minecraft:stick" end
 local function isCraftingTable(name) return name == "minecraft:crafting_table" end
 -- modded wood names vary wildly (log, log2, log_0, logs.0, plank_greatwood,

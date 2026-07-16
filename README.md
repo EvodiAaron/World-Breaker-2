@@ -90,7 +90,11 @@ Conventions at the starting position ("home"):
 - Loot is unloaded into a chest in the block space **directly behind** home.
   You can place one there yourself, **or just give the turtle chests in its
   inventory** — it places one behind home on its first haul-back. (Or avoid
-  home trips entirely with `UNLOAD_MODE chest` / `ender`.)
+  home trips entirely with `UNLOAD_MODE chest` / `ender`.) **Any mod's
+  chest counts**, placed or carried — Quark spruce chests, iron chests,
+  barrels, crates — the turtle uses whatever chest-like thing it has or
+  finds (armour "chestplates" and ender chests are excluded; ender chests
+  have their own unload mode).
 - A **second chest to its left** enables crafting (used as a private buffer,
   because `turtle.craft` needs every non-recipe slot empty). Keep it for the
   turtle only. If there's a spare chest in the turtle's inventory it places

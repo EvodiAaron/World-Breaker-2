@@ -182,7 +182,8 @@ local function placeAt(x, y, z)
   if world[key(x, y, z)] then return false end
   takeSelected()
   world[key(x, y, z)] = name
-  if name == "minecraft:chest" then containers[key(x, y, z)] = {} end
+  -- any mod's chest becomes a working container when placed
+  if name:find("chest") then containers[key(x, y, z)] = {} end
   return true
 end
 function turtle.place() return placeAt(ahead()) end
@@ -1037,6 +1038,23 @@ for _, s in ipairs(rednetSent) do
   if type(s.msg) == "table" and s.msg.kind == "ready" then readySent23 = true end
 end
 check(readySent23, "ready reported back to the master")
+
+-- ---------- scenario 24: modded chest variants ----------
+print("scenario: a Quark spruce chest works as the home chest; armour doesn't")
+resetWorld()
+fillGround(-3, 4, -3, 4, -6, -1, "minecraft:iron_ore") -- loot that must be hauled
+inv[1] = { name = "quark:custom_chest", count = 1 }    -- 1.12 variant chest item
+inv[2] = { name = "minecraft:diamond_chestplate", count = 1 } -- decoy "chest" name
+runWB2("quarry", "2", "2", "2")
+check(world[key(-1, 0, 0)] == "quark:custom_chest",
+  "variant chest placed behind home from inventory")
+check(#containers[key(-1, 0, 0)] > 0, "loot deposited into the variant chest")
+local chestplateInChest = false
+for _, s in ipairs(containers[key(-1, 0, 0)]) do
+  if s.name == "minecraft:diamond_chestplate" then chestplateInChest = true end
+end
+check(chestplateInChest, "chestplate treated as loot, not as a chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------
 print("")
