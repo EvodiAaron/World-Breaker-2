@@ -61,13 +61,21 @@ inventory — it refuels itself), then:
 ```
 wb2                    -- interactive wizard
 wb2 quarry 16 16       -- 16 forward x 16 to-the-right, down to bedrock
-wb2 quarry 16 16 20    -- same but only 20 blocks deep
+wb2 quarry 16 16 20    -- same but only 20 layers deep
+wb2 quarry 16 16 left  -- width extends to the turtle's LEFT instead
+wb2 quarry 16 16 30 up -- mine UPWARD (30 layers into the sky/ceiling)
 wb2 strip 64           -- 64-block 1x2 tunnel, chasing every ore vein it passes
 wb2 strip 64 4         -- same, then snakes back and forth 4 more times,
                        --   parallel rows with a 2-block gap between them
+wb2 strip 64 4 left    -- snaked rows extend to the LEFT instead
 wb2 resume             -- continue a saved task (startup does this for you)
 wb2 listen             -- idle, await master commands (needs a modem)
 ```
+
+The turtle sits **inside the corner block** of the quarry: place it at a
+corner of the area you want gone, and its own layer counts as layer 1 of
+the requested depth. The volume extends `length` forward, `width` to the
+right (or left), and `depth` down (or up) from the block it occupies.
 
 Conventions at the starting position ("home"):
 - The turtle's starting block is home; it returns there when full, out of
@@ -78,7 +86,11 @@ Conventions at the starting position ("home"):
   home trips entirely with `UNLOAD_MODE chest` / `ender`.)
 - A **second chest to its left** enables crafting (used as a private buffer,
   because `turtle.craft` needs every non-recipe slot empty). Keep it for the
-  turtle only.
+  turtle only. If there's a spare chest in the turtle's inventory it places
+  the buffer chest itself, digging out the spot if it's only rock.
+- At startup and whenever a task finishes, the turtle prints a **restock
+  list** — the items its current config would use that it isn't carrying
+  (fuel, bucket, torches, crafting table, wood, coal, chests, scanner...).
 - Refuelling never needs a chest: the turtle eats coal from its own
   inventory, and parks at home to wait if it has none.
 
@@ -113,7 +125,8 @@ Everything beyond "dig the hole" is an independent toggle:
 wb2 config                      -- list everything
 wb2 set PLACE_TORCHES true      -- strip mode: torch every TORCH_INTERVAL blocks
 wb2 set STRIP_VEIN false        -- ore-vein chasing on/off
-wb2 set DROP_JUNK false         -- keep cobble/dirt instead of discarding
+wb2 set ORE_SCAN true           -- strip mode: Plethora block-scanner ore homing
+wb2 set DROP_JUNK false         -- keep cobble/dirt/decorative stone (one toggle)
 wb2 set UNLOAD_MODE ender       -- home | chest | ender
 wb2 set CRAFT_TORCHES true      -- craft torches at home (buffer chest needed)
 wb2 set CRAFT_CHESTS true       -- craft chests at home (from planks OR logs)
@@ -123,9 +136,18 @@ wb2 set LAVA_REFUEL false       -- don't scoop lava into a carried bucket
 wb2 set VEIN_DEPTH 16           -- how far to chase ore veins
 ```
 
+**Junk is one category, one toggle.** `DROP_JUNK` covers the exact-name
+`JUNK` list (cobble, stone, dirt, gravel, sand, ...) *plus* decorative
+stones from any mod matched by name (`JUNK_MATCH`: andesite, diorite,
+granite, basalt, marble, limestone, tuff, slate). Anything ore-like is
+never discarded, whatever it's called.
+
 Notable behaviors, all automatic: gravel/sand columns, mobs in the way,
-bedrock detection, and full task resume after reboot/chunk-unload via
-`/wb2data/state`. Fuel is watched continuously: the turtle always knows its
+and full task resume after reboot/chunk-unload via `/wb2data/state`.
+**Bedrock is tolerated**, not fatal: a bedrock column poking into a quarry
+is skipped, cells shadowed behind it are retried from another angle on a
+second sweep, and the quarry finishes cleanly around whatever it truly
+can't reach. Fuel is watched continuously: the turtle always knows its
 distance home, and the moment its fuel is only just enough to make the trip
 (plus `FUEL_RESERVE`), it retreats to the start position, unloads, and waits
 for you to drop fuel in its inventory — then resumes the job by itself. Set
@@ -136,6 +158,18 @@ source it meets while digging gets scooped and burned on the spot — 1,000
 fuel per bucket, and the empty bucket is kept for the next one. Deep
 quarries often pay for their own fuel this way. `wb2 set LAVA_REFUEL false`
 to turn it off (the bucket only fills when fuel is below `REFUEL_TARGET`).
+
+### Ore homing with a block scanner (Plethora)
+
+With `ORE_SCAN true` and a **Plethora block scanner module in the
+inventory** (not equipped — the turtle tool-swaps it onto the pickaxe side
+for each scan, exactly like the crafting table trick), a strip mine scans
+its surroundings every `SCAN_INTERVAL` blocks, walks to every ore within
+the scanner's 8-block radius — including ores plain vein-chasing would
+never see through the wall — vein-mines each one, and returns to the
+tunnel. The scanner reports world-aligned offsets, so this **needs GPS**
+to know which way it's facing; without a GPS fix the turtle says so once
+and keeps strip-mining normally.
 
 ### When do I use the startup script?
 
@@ -157,24 +191,37 @@ wb2master
 
 Every turtle running `wb2` (any mode, including `listen`) with a modem
 broadcasts its status every few seconds and appears on the dashboard —
-no enrolment, no pairing. Select with up/down, then:
+no enrolment, no pairing. Every button shows its hotkey as the
+capitalised, highlighted letter in its label (`x:Stop` when the label
+doesn't contain the key). Select with up/down, then:
 
-- `q`/`s` start a quarry/strip **where the turtle currently stands**
-  (its position becomes the new home; strip accepts `<length> [snakes]`)
+- `m` **modes menu** — Quarry / Strip / Multi-quarry / Goto on one screen
+  (the direct hotkeys below still work from the dashboard)
+- `q`/`s` start a quarry/strip **where the turtle currently stands** (its
+  position becomes the new home). Both accept the same trailing options as
+  the turtle CLI: `32 32 20 left up` for quarries, `64 4 left` for strips.
 - `g` send it to coordinates (world coords with GPS, or `r x y z` relative)
 - `x` stop in place, `e` resume, `r` return home & unload, `a` abort task
 - `c` **config menu**: every optional feature of the selected turtle on one
-  screen — torches, vein chasing, junk, unload mode, crafting, auto-refuel/
-  return, lava scooping, thresholds. Booleans toggle with enter (or a tap),
-  numbers prompt for a value, changes apply live.
+  screen — torches, vein chasing, scanner homing, junk, unload mode,
+  crafting, auto-refuel/return, lava scooping, thresholds. Booleans toggle
+  with enter (or a tap), numbers prompt for a value, changes apply live —
+  **mid-run too**: a turtle told `PLACE_TORCHES true` halfway down a tunnel
+  starts torching from that block onward.
 - `t` toggle torches, `u` cycle unload mode, `i` info screen, `p` ping
 
 Every turtle's row shows an approximate **% complete** for its current task
 (blank for to-bedrock quarries, whose total depth is unknown), plus a live
-progress bar for the selection. The `i` info screen draws a plan-view map of
-the current quarry layer (mined / current / remaining cells) plus overall
-completion and the haul so far (blocks dug, ores by type). Turtles announce
-`ALERT_BLOCKS` finds (diamonds/emeralds by default) as they happen.
+progress bar for the selection. The `i` info screen **updates live** as the
+turtle phones home: state, fuel, distance, haul (blocks dug, ores by type),
+and a plan-view map of the current quarry layer redraw as fresh statuses
+arrive. Turtles announce `ALERT_BLOCKS` finds (diamonds/emeralds by
+default) as they happen.
+
+The header shows this modem's **estimated wireless range** (64 blocks at
+ground level, more if the master sits high with GPS to prove it). A turtle
+that reports from within 15% of that limit turns **orange** in the list —
+it's about to walk out of contact.
 
 Fleet controls (keyboard only):
 
@@ -182,13 +229,21 @@ Fleet controls (keyboard only):
   turtle in range at once.
 - **Shift+C** — the same config menu, but every change is broadcast to
   **all** turtles at once (the values shown are the selected turtle's).
-- **`m`** — **tiled quarry**: splits one big quarry across every idle
-  turtle. Enter the total size; the master divides the width into
-  side-by-side tiles, shows you the plan (which turtle takes which
-  columns), and starts them all together. Line the turtles up first: one
-  row, same facing, each at the left edge of its tile — the plan screen
-  spells out the spacing. Each tile is that turtle's own home, so give
-  each one chests aboard (or a chest behind it).
+- **Multi-quarry** (in the `m` modes menu) — splits one big quarry across
+  several turtles as side-by-side tiles. Pick a **leader** (defaults to
+  the selection); it anchors the quarry at its own corner block. Then:
+  - **With GPS**: the master reads the leader's position + facing and the
+    followers **walk to their tile corners themselves**, digging through
+    whatever is in the way — they can start scattered anywhere in range.
+  - **Without GPS (line mode)**: place the turtles in one row first — each
+    directly beside the previous, in the order the plan screen lists, all
+    facing the same way as the leader — and they shift themselves apart
+    by counting blocks.
+  Either way **nothing is mined until every follower reports "in
+  position"**; only then does the master fire all the quarries together
+  (with your chosen depth, left/right and up/down). Each tile corner is
+  that turtle's own home, so give each one chests aboard (or a chest
+  behind it). `q` cancels a stuck muster.
 - **`l`** — lock the selected turtle to this master. On a multiplayer server
   anyone can send rednet commands; a locked turtle ignores control commands
   from other computers (status stays public, `ping` still works). Press `l`
@@ -244,7 +299,9 @@ test/sim.lua          headless mock-turtle test suite (run: lua test/sim.lua)
 
 ## Development
 
-`test/sim.lua` mocks the ComputerCraft turtle/fs APIs and runs real quarry and
-strip jobs against an in-memory world — bounds, bedrock, vein chasing, torch
-placement, unload trips, and reboot-resume are all asserted. Run it with any
-desktop Lua 5.3+ after changing `wb2.lua`.
+`test/sim.lua` mocks the ComputerCraft turtle/fs/rednet/GPS/peripheral APIs
+and runs real quarry and strip jobs against an in-memory world — bounds,
+bedrock intrusions, vein chasing, scanner ore-homing, torch placement,
+unload trips, mid-run config changes over rednet, mustering (both GPS and
+line mode), and reboot-resume are all asserted. Run it with any desktop
+Lua 5.3+ after changing `wb2.lua`.
