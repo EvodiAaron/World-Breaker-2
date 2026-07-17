@@ -20,8 +20,14 @@
     v  push /wb2.lua to all turtles (over-the-air update)
     Shift+X / Shift+R / Shift+E   stop / recall / resume ALL turtles
 
-  The header shows this modem's estimated wireless range; a turtle
-  within 15% of that limit is drawn in orange as a warning.
+  The header shows this modem's estimated wireless range: 64 blocks
+  at ground level, scaled up by this computer's altitude when GPS can
+  supply it (a trailing "+" means no GPS fix yet, so the true range
+  is at least the shown floor; the fix is retried in the background).
+  Wired-only modems show "wired". Ender modems can't be told apart by
+  the API, so one is inferred - and warnings disabled - the moment a
+  turtle reports from beyond the 384-block standard maximum. A turtle
+  within 15% of the limit is drawn in orange as a warning.
 
   Row markers: * after the state = task paused, ! = the turtle is
   running code with no version stamp (outdated - push with v). The
@@ -73,16 +79,46 @@ local speaker = peripheral.find("speaker")
 local monitor = peripheral.find("monitor")
 if monitor then pcall(function() monitor.setTextScale(0.5) end) end
 
--- estimated wireless range of this computer's modem: 64 blocks at ground
--- level, growing linearly above y=96 up to 384 at the build limit. Both
--- ends of a link count, so treat it as a rough guide (storms shrink it,
--- ender modems ignore it entirely).
-local rangeEst = 64
-do
-  local ok, _, y = pcall(gps.locate, 1)
-  if ok and type(y) == "number" and y > 96 then
-    rangeEst = math.min(384, math.floor(64 + (y - 96) * 2))
+-- Estimated wireless range: standard modems reach 64 blocks at ground
+-- level, growing linearly above y=96 to 384 at the build limit; storms
+-- shrink it, and both ends of a link count, so treat it as a rough
+-- guide. Ender modems are unlimited - but the API can't tell one from a
+-- normal wireless modem, so one is INFERRED the moment any turtle
+-- reports from beyond the 384-block physical maximum.
+local RANGE_BASE, RANGE_MAX = 64, 384
+local rangeEst = RANGE_BASE
+local rangeHasGps = false -- altitude factored in (else shown with "+")
+local rangeEnder = false  -- inferred from an impossible distance
+local haveWireless = false
+
+local function refreshRange()
+  -- only wireless modems carry rednet to turtles; wired ones are cables
+  haveWireless = false
+  for _, side in ipairs({ "left", "right", "top", "bottom", "front", "back" }) do
+    if peripheral.getType(side) == "modem" then
+      local m = peripheral.wrap(side)
+      if not m.isWireless or m.isWireless() then haveWireless = true end
+    end
   end
+  local ok, _, y = pcall(gps.locate, 1)
+  if ok and type(y) == "number" then
+    rangeHasGps = true
+    rangeEst = RANGE_BASE
+    if y > 96 then
+      rangeEst = math.min(RANGE_MAX, math.floor(
+        RANGE_BASE + (y - 96) * (RANGE_MAX - RANGE_BASE) / (256 - 96)))
+    end
+  end
+end
+refreshRange()
+
+-- header label for what we currently know about the range
+local function rangeLabel(short)
+  if rangeEnder then return short and "inf" or "range: ender (no limit)" end
+  if not haveWireless then return short and "wired" or "range: wired only" end
+  local plus = rangeHasGps and "" or "+" -- no GPS fix: ground-level floor
+  return short and ("~" .. rangeEst .. plus)
+              or ("range ~" .. rangeEst .. "m" .. plus)
 end
 
 -- world-heading unit vectors (E=0, S=1, W=2, N=3), same frame as turtles
@@ -131,10 +167,17 @@ local function recordDistance(ev)
   local reply, dist = ev[4], ev[6]
   if type(reply) == "number" and type(dist) == "number" and turtles[reply] then
     turtles[reply].dist = dist
+    -- farther than any standard wireless modem can physically reach:
+    -- this link must be an ender modem, so range warnings are moot
+    if dist > RANGE_MAX and not rangeEnder then
+      rangeEnder = true
+      pushNote(("#%d heard from %dm away - ender modem detected"):format(reply, dist))
+    end
   end
 end
 
 local function nearRangeEdge(t)
+  if rangeEnder or not haveWireless then return false end
   return t.dist ~= nil and t.dist >= rangeEst * 0.85
 end
 
@@ -340,8 +383,8 @@ local function draw()
   else
     write(isColor and "World Breaker 2 - Master (touch)" or "World Breaker 2 - Master")
   end
-  local count = compact and ("t:" .. #order .. " ~" .. rangeEst)
-             or ("turtles: " .. #order .. "  range ~" .. rangeEst .. "m")
+  local count = compact and ("t:" .. #order .. " " .. rangeLabel(true))
+             or ("turtles: " .. #order .. "  " .. rangeLabel(false))
   term.setCursorPos(w - #count + 1, 1)
   write(count)
   setColor(colors.gray)
@@ -529,8 +572,8 @@ local function infoScreen()
     fmtFuel(st.fuel), fmtPos(st), tostring(st.freeSlots or "?")))
   local dist = turtles[id].dist
   if dist then
-    setColor(dist >= rangeEst * 0.85 and colors.orange or colors.lightGray)
-    print(("distance from master: %dm (my range ~%dm)"):format(dist, rangeEst))
+    setColor(nearRangeEdge(turtles[id]) and colors.orange or colors.lightGray)
+    print(("distance from master: %dm (%s)"):format(dist, rangeLabel(false)))
   end
   if st.version then
     setColor(colors.lightGray)
@@ -1155,6 +1198,7 @@ end
 
 paint()
 local mainTimer = os.startTimer(2)
+local lastRangeTry = os.clock()
 while true do
   local ev = { os.pullEvent() }
   if ev[1] == "rednet_message" then
@@ -1167,6 +1211,12 @@ while true do
     -- on those spawned an extra heartbeat each time, and the redraws
     -- multiplied until the screen flickered constantly.
     if ev[2] == mainTimer then
+      -- the GPS constellation may come up after this console did; keep
+      -- trying occasionally until the altitude is known
+      if not rangeHasGps and os.clock() - lastRangeTry >= 30 then
+        lastRangeTry = os.clock()
+        refreshRange()
+      end
       paint() -- periodic repaint keeps offline flags honest
       mainTimer = os.startTimer(2)
     end

@@ -234,10 +234,17 @@ and a plan-view map of the current quarry layer redraw as fresh statuses
 arrive. Turtles announce `ALERT_BLOCKS` finds (diamonds/emeralds by
 default) as they happen.
 
-The header shows this modem's **estimated wireless range** (64 blocks at
-ground level, more if the master sits high with GPS to prove it). A turtle
-that reports from within 15% of that limit turns **orange** in the list —
-it's about to walk out of contact.
+The header shows this modem's **estimated wireless range**, factoring in
+height and modem type: 64 blocks at ground level, scaled up by the
+master's altitude when GPS can supply it (a trailing `+` means no GPS fix
+yet — the real range is *at least* the shown floor, and the master keeps
+retrying in the background in case the constellation comes up late).
+Wired-only setups show `wired`. **Ender modems are detected
+automatically**: the API can't distinguish one, so the first time a
+turtle reports from beyond the 384-block standard-modem maximum the
+header switches to `range: ender (no limit)` and proximity warnings turn
+off. Otherwise, a turtle that reports from within 15% of the limit turns
+**orange** in the list — it's about to walk out of contact.
 
 Fleet controls (keyboard only):
 
