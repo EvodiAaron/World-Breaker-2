@@ -36,9 +36,18 @@ turtle resume its job after a server restart or chunk reload).
 
 **Option A — GitHub (easiest, needs the in-game http API):**
 1. Push this repo to GitHub and edit `BASE` at the top of `install.lua`.
-2. Upload the installer once: `pastebin put install.lua` (from a computer that
-   has it), or paste it via Option B.
-3. On each turtle: `pastebin get <code> install` then `install turtle`.
+2. On each turtle or master, fetch the installer straight from GitHub:
+
+   ```
+   wget https://raw.githubusercontent.com/EvodiAaron/World-Breaker-2/main/install.lua install
+   ```
+
+   then `install turtle` (or `install master`). The same `wget` line —
+   with `delete install` first — refreshes a stale installer copy
+   whenever the installer itself changes.
+3. No `wget` on your CC version? Upload the installer once with
+   `pastebin put install.lua`, then `pastebin get <code> install` on
+   each machine.
 
 **Option B — pastebin per file:**
 Put `turtle/wb2.lua` on pastebin (from the pastebin website), then in-game:
