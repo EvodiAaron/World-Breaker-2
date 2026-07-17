@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.6" -- shown on the master's info screen; bump on release
+local VERSION = "1.7" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -696,17 +696,45 @@ end
 
 -- ================= GPS calibration (optional) =================
 
-local function calibrate()
+-- one horizontal step WITHOUT digging: forward, or backward as a
+-- fallback; returns +1/-1 for the direction taken, nil if boxed in
+local function gentleStep()
+  if turtle.forward() then
+    pos.x = pos.x + DX[heading]
+    pos.z = pos.z + DZ[heading]
+    saveState()
+    return 1
+  end
+  if turtle.back() then
+    pos.x = pos.x - DX[heading]
+    pos.z = pos.z - DZ[heading]
+    saveState()
+    return -1
+  end
+  return nil
+end
+
+-- Learn world position + facing from two GPS fixes one block apart.
+-- At task start the step may dig (the turtle is about to mine there
+-- anyway); `gentle` is for orienting an idle turtle and NEVER digs -
+-- a boxed-in turtle just stays on dead reckoning.
+local function calibrate(gentle)
   if not hasModem then return end
   local x, y, z = gps.locate(1)
   if not x then return end
   local before = { x = pos.x, y = pos.y, z = pos.z }
   local h = heading
-  if not tryForward() then return end
+  local dirSign = 1
+  if gentle then
+    dirSign = gentleStep()
+    if not dirSign then return end
+  else
+    if not tryForward() then return end
+  end
   local x2, y2, z2 = gps.locate(1)
-  tryBack()
+  if dirSign == 1 then tryBack() else tryForward() end
   if not x2 then return end
-  local dx, dz = x2 - x, z2 - z
+  local dx, dz = (x2 - x) * dirSign, (z2 - z) * dirSign
   local wh -- world heading index: E=0, S=1, W=2, N=3
   if dx == 1 then wh = 0
   elseif dz == 1 then wh = 1
@@ -1621,9 +1649,10 @@ local function handleCmd(sender, msg)
 
   elseif msg.cmd == "pose" then
     -- refresh GPS calibration and report back (position + world heading);
-    -- calibration steps the turtle forward, so never do it mid-task
+    -- gentle: an idle turtle takes one un-dug step and returns, and one
+    -- that is boxed in (or mid-task) just reports what it already knows
     if not (task and not task.paused) then
-      pcall(calibrate)
+      pcall(calibrate, true)
     end
     rednet.send(sender, buildStatus(), PROTO_STATUS)
 
@@ -1847,6 +1876,7 @@ elseif verb == "resume" then
     if not hasModem then return end
     print("Listening for master commands instead.")
     setStatus("idle")
+    if not calib then pcall(calibrate, true) end -- orient if GPS is up
   else
     -- fix any drift from a mid-move server stop, if GPS is reachable
     if hasModem and calib then
@@ -1866,6 +1896,7 @@ elseif verb == "listen" then
     return
   end
   setStatus("idle", "awaiting master commands")
+  pcall(calibrate, true) -- orient (never digging) if GPS is up
 elseif verb == "" then
   startTask(wizard())
 else

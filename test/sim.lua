@@ -1143,6 +1143,27 @@ check(logHas("strip complete"), "no crash after the post-unload turn")
 check(countInvItem("minecraft:torch") >= 24, "crafting proceeded normally")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 29: gentle GPS orient on boot ----------
+-- an idle turtle self-orients when GPS exists, stepping BACKWARD when
+-- something (here: a chest) blocks the way forward - and never digging
+print("scenario: idle turtle orients via GPS without digging the chest ahead")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+addChest(1, 0, 0)                       -- furniture directly in front
+shutdownWhen = function(msg) return msg.world ~= nil end
+runWB2("listen")
+check(world[key(1, 0, 0)] == "minecraft:chest", "chest in front was not dug")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle stepped back and returned")
+local gotWorld = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and type(s.msg.world) == "table"
+     and s.msg.world.x == 100 and s.msg.world.z == 200 then
+    gotWorld = true
+  end
+end
+check(gotWorld, "status now reports true world coordinates")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

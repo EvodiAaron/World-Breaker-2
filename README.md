@@ -225,6 +225,12 @@ doesn't contain the key). Select with up/down, then:
   **mid-run too**: a turtle told `PLACE_TORCHES true` halfway down a tunnel
   starts torching from that block onward.
 - `t` toggle torches, `u` cycle unload mode, `i` info screen, `p` ping
+- `o` **GPS orient** the selection (`Shift+O` = all turtles) — use this
+  after building a GPS constellation so already-deployed turtles learn
+  world coordinates without waiting for their next task. The orienting
+  step is gentle: one block forward (or backward if blocked) and back,
+  **never digging**; a boxed-in or busy turtle just reports what it
+  knows. Idle turtles also self-orient on boot when GPS answers.
 
 Every turtle's row shows an approximate **% complete** for its current task
 (blank for to-bedrock quarries, whose total depth is unknown), plus a live

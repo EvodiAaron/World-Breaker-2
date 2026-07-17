@@ -13,7 +13,10 @@
     e  resume paused task    x  stop (pause) in place
     a  abort task            t  toggle torch placement
     u  cycle unload mode     i  full info for selection (updates live)
-    p  ping selection
+    p  ping selection        o  GPS orient selection (Shift+O = ALL) -
+                                use after building a GPS constellation
+                                so idle turtles learn world coords; the
+                                step is gentle and never digs
     c  config menu: every optional feature of the selection
     Shift+C  fleet config menu: same, applied to ALL turtles
     l  lock/unlock selection to this master
@@ -478,6 +481,7 @@ local function draw()
     })
     drawButtons(h - 1, {
       { label = "X", ch = "x" }, { label = "A", ch = "a" }, { label = "C", ch = "c" },
+      { label = "O", ch = "o" },
     })
   else
     drawButtons(h - 2, {
@@ -487,7 +491,7 @@ local function draw()
     })
     drawButtons(h - 1, {
       { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
-      { label = "Config", ch = "c" },
+      { label = "Config", ch = "c" }, { label = "Locate", ch = "o" },
     })
   end
   setColor(colors.white)
@@ -1108,6 +1112,14 @@ local function handleChar(ch)
     infoScreen()
   elseif ch == "p" then
     send({ cmd = "ping" })
+  elseif ch == "o" then
+    -- (re)take a GPS fix: an idle turtle steps one block (never digging)
+    -- and back to learn its world position + facing
+    send({ cmd = "pose" })
+    pushNote(("#%d: GPS orient requested"):format(selectedId() or -1))
+  elseif ch == "O" then
+    rednet.broadcast({ cmd = "pose" }, PROTO_CMD)
+    pushNote("ALL turtles: GPS orient requested")
   elseif ch == "m" then
     modesMenu()
   elseif ch == "c" then
