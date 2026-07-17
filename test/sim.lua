@@ -1164,6 +1164,40 @@ for _, s in ipairs(rednetSent) do
 end
 check(gotWorld, "status now reports true world coordinates")
 
+-- ---------- scenario 30: mob spawner in the strip tunnel ----------
+-- a spawner sitting right in the tunnel line is never broken: its cell
+-- is skipped and travel hops over it (up, along, back down)
+print("scenario: mob spawner in the tunnel is hopped over, never broken")
+resetWorld()
+fillGround(-2, 8, -1, 1, -3, 3)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+world[key(3, 1, 0)] = "minecraft:mob_spawner" -- at the travel level, mid tunnel
+logClear()
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "6")
+check(world[key(3, 1, 0)] == "minecraft:mob_spawner", "spawner still standing")
+check(countInvItem("minecraft:mob_spawner") == 0, "no spawner in the loot")
+check(world[key(5, 1, 0)] == nil and world[key(5, 0, 0)] == nil, "tunnel continues past the spawner")
+check(logHas("spawner"), "spawner announced in the notes")
+check(logHas("strip complete"), "strip finished despite the spawner")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 31: mob spawner inside a quarry volume ----------
+print("scenario: quarry leaves an embedded mob spawner untouched")
+resetWorld()
+fillGround(-3, 6, -3, 6, -6, -1)
+addChest(-1, 0, 0)
+world[key(1, -1, 1)] = "minecraft:mob_spawner" -- buried inside the volume
+logClear()
+runWB2("quarry", "3", "2", "3")
+check(world[key(1, -1, 1)] == "minecraft:mob_spawner", "spawner still standing")
+check(countInvItem("minecraft:mob_spawner") == 0, "no spawner in the loot")
+check(world[key(2, -2, 1)] == nil, "cells beyond the spawner still mined")
+check(world[key(0, -2, 0)] == nil, "layers below the spawner level still mined")
+check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

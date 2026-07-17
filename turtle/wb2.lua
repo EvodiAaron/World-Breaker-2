@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.7" -- shown on the master's info screen; bump on release
+local VERSION = "1.8" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -509,6 +509,13 @@ local function isTurtleBlock(name)
   return pathOf(name):find("turtle") ~= nil
 end
 
+-- mob spawners (vanilla mob_spawner, EnderIO powered spawners, ...) are
+-- far too valuable to break: the dig helpers refuse them like bedrock,
+-- travel hops over them, and mining leaves them embedded in the pit
+local function isSpawner(name)
+  return pathOf(name):find("spawner") ~= nil
+end
+
 -- give a fellow turtle time to move out of the way; true once the spot
 -- is clear, false if it stayed put (treat like bedrock: route around)
 local function waitForTurtle(inspectFn)
@@ -533,6 +540,8 @@ local function digForwardSafe()
     local ok, d = turtle.inspect()
     if ok and isTurtleBlock(d.name) then
       if not waitForTurtle(turtle.inspect) then return false end
+    elseif ok and isSpawner(d.name) then
+      return false -- never break a mob spawner
     else
       local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
       if not turtle.dig() then return false end -- bedrock / protected
@@ -553,6 +562,8 @@ local function digUpSafe()
     local ok, d = turtle.inspectUp()
     if ok and isTurtleBlock(d.name) then
       if not waitForTurtle(turtle.inspectUp) then return false end
+    elseif ok and isSpawner(d.name) then
+      return false -- never break a mob spawner
     else
       local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
       if not turtle.digUp() then return false end
@@ -572,6 +583,7 @@ local function digDownSafe()
     if ok and isTurtleBlock(d.name) then
       return waitForTurtle(turtle.inspectDown)
     end
+    if ok and isSpawner(d.name) then return false end -- never break a mob spawner
     if not turtle.digDown() then return false end
     if ok then recordDig(d.name) end
   end
@@ -629,6 +641,8 @@ local function tryDown()
       local okI, d = turtle.inspectDown()
       if okI and isTurtleBlock(d.name) then
         if not waitForTurtle(turtle.inspectDown) then return false end
+      elseif okI and isSpawner(d.name) then
+        return false -- never break a mob spawner
       else
         if not turtle.digDown() then return false end
         if okI then recordDig(d.name) end
@@ -666,6 +680,19 @@ end
 -- The path is a straight x-then-z line; zFirst flips the axis order,
 -- which is often enough to slip around a bedrock column.
 local function goTo(t, zFirst)
+  -- a mob spawner blocking the way is never dug: hop the 1x1 obstacle
+  -- (up, two steps along, back down). Refuses when the spawner IS the
+  -- target cell; if coming down is blocked too, the trailing stepY of
+  -- the caller settles the height once travel is done.
+  local function hopOverSpawner(remaining)
+    local ok, d = turtle.inspect()
+    if not (ok and isSpawner(d.name)) then return false end
+    if remaining < 2 then return false end
+    if not tryUp() then return false end
+    if not (tryForward() and tryForward()) then return false end
+    tryDown()
+    return true
+  end
   local function stepY()
     while pos.y < t.y do if not tryUp() then return false end end
     while pos.y > t.y do if not tryDown() then return false end end
@@ -674,21 +701,29 @@ local function goTo(t, zFirst)
   local function stepX()
     if pos.x ~= t.x then
       face(pos.x < t.x and 0 or 2)
-      while pos.x ~= t.x do if not tryForward() then return false end end
+      while pos.x ~= t.x do
+        if not tryForward() then
+          if not hopOverSpawner(math.abs(t.x - pos.x)) then return false end
+        end
+      end
     end
     return true
   end
   local function stepZ()
     if pos.z ~= t.z then
       face(pos.z < t.z and 1 or 3)
-      while pos.z ~= t.z do if not tryForward() then return false end end
+      while pos.z ~= t.z do
+        if not tryForward() then
+          if not hopOverSpawner(math.abs(t.z - pos.z)) then return false end
+        end
+      end
     end
     return true
   end
   local first, second = stepX, stepZ
   if zFirst then first, second = stepZ, stepX end
   if t.y >= pos.y then
-    return stepY() and first() and second() -- going up: rise first (e.g. out of the pit)
+    return stepY() and first() and second() and stepY() -- going up: rise first (e.g. out of the pit)
   else
     return first() and second() and stepY() -- going down: travel, then descend
   end
@@ -1391,34 +1426,45 @@ local function runStrip()
     local x, z = stripCell(i, len, snakes)
     if task.dir == "left" then z = -z end -- snaked rows on the chosen side
     setStatus("strip", ("block %d/%d"):format(i + 1, total))
-    if not goTo({ x = x, y = 1, z = z }) then -- travel the upper level
-      finishTask("tunnel blocked")
-      return
-    end
-    digDownSafe() -- clear the floor level of the 1x2 tunnel
-
-    if cfg.STRIP_VEIN then
-      dropJunk()
-      if freeSlots() < 3 then maintainInventory({ x = x, y = 1, z = z }) end
-      veinCheck(cfg.VEIN_DEPTH)     -- upper level: sides, ceiling, ahead
-      if tryDown() then
-        veinCheck(cfg.VEIN_DEPTH)   -- lower level: sides, floor
-        tryUp()
+    local reached = goTo({ x = x, y = 1, z = z }) -- travel the upper level
+    if not reached then
+      -- a mob spawner sitting IN the tunnel line is left alone: skip its
+      -- cell and carry on (travel hops over it); anything else is a wall
+      local okS, dS = turtle.inspect()
+      if okS and isSpawner(dS.name) then
+        note(("mob spawner in the tunnel at block %d - leaving it be"):format(i + 1))
+      else
+        finishTask("tunnel blocked")
+        return
       end
     end
 
-    if cfg.ORE_SCAN and (i + 1) % cfg.SCAN_INTERVAL == 0 then
-      scanAndChase({ x = x, y = 1, z = z })
-    end
+    if reached then
+      digDownSafe() -- clear the floor level of the 1x2 tunnel
 
-    maintainInventory({ x = x, y = 1, z = z })
+      if cfg.STRIP_VEIN then
+        dropJunk()
+        if freeSlots() < 3 then maintainInventory({ x = x, y = 1, z = z }) end
+        veinCheck(cfg.VEIN_DEPTH)     -- upper level: sides, ceiling, ahead
+        if tryDown() then
+          veinCheck(cfg.VEIN_DEPTH)   -- lower level: sides, floor
+          tryUp()
+        end
+      end
 
-    if cfg.PLACE_TORCHES and (i + 1) % cfg.TORCH_INTERVAL == 0 then
-      if placeTorchDown() then
-        task.torchWarned = nil
-      elseif not task.torchWarned then
-        task.torchWarned = true -- warn once, not at every interval
-        note("no torches aboard to place - restock me (or enable CRAFT_TORCHES)")
+      if cfg.ORE_SCAN and (i + 1) % cfg.SCAN_INTERVAL == 0 then
+        scanAndChase({ x = x, y = 1, z = z })
+      end
+
+      maintainInventory({ x = x, y = 1, z = z })
+
+      if cfg.PLACE_TORCHES and (i + 1) % cfg.TORCH_INTERVAL == 0 then
+        if placeTorchDown() then
+          task.torchWarned = nil
+        elseif not task.torchWarned then
+          task.torchWarned = true -- warn once, not at every interval
+          note("no torches aboard to place - restock me (or enable CRAFT_TORCHES)")
+        end
       end
     end
 
