@@ -171,6 +171,13 @@ waited out (~15 s, status shows "another turtle is in my way"); if it
 stays parked, the spot is treated like bedrock — routed around or
 skipped — so crossing paths in a tiled multi-quarry can't destroy a
 fleetmate and spill its inventory.
+**Mob spawners are never broken**: anything with "spawner" in its block
+name (vanilla mob spawners, EnderIO powered spawners, ...) is refused by
+every dig. A spawner blocking travel is hopped over — up, across, back
+down — and the run resumes; one embedded in a quarry stays put on its
+pillar while everything reachable around it is mined out. A spawner
+sitting right in a strip tunnel's line gets its cell skipped with a note
+telling you where it is, so you can come set up a mob farm later.
 **Bedrock is tolerated**, not fatal: a bedrock column poking into a quarry
 is skipped, cells shadowed behind it are retried from another angle on a
 second sweep, and the quarry finishes cleanly around whatever it truly
@@ -271,7 +278,11 @@ Fleet controls (keyboard only):
   **all** turtles at once (the values shown are the selected turtle's).
 - **Multi-quarry** (in the `m` modes menu) — splits one big quarry across
   several turtles as side-by-side tiles. Pick a **leader** (defaults to
-  the selection); it anchors the quarry at its own corner block. Then:
+  the selection); it anchors the quarry at its own corner block. Then
+  pick the **followers**: leave the prompt blank to take every idle
+  turtle, or type a list of ids to use just those — **the order you type
+  is the placement order**, i.e. the order they stand in the row (line
+  mode) or take their tiles outward from the leader (GPS mode). Then:
   - **With GPS**: the master reads the leader's position + facing and the
     followers **walk to their tile corners themselves**, digging through
     whatever is in the way — they can start scattered anywhere in range.

@@ -688,13 +688,43 @@ local function multiQuarry()
   for _, tid in ipairs(avail) do if tid == defLeader then isAvail = true end end
   if not isAvail then defLeader = avail[1] end
   local leader = tonumber(prompt(("leader turtle id [%d]: "):format(defLeader))) or defLeader
-  local ordered, found = { leader }, false
+  local others, found = {}, false
   for _, tid in ipairs(avail) do
-    if tid == leader then found = true else table.insert(ordered, tid) end
+    if tid == leader then found = true else table.insert(others, tid) end
   end
   if not found then
     pushNote(("#%d is not an idle, online turtle."):format(leader))
     return
+  end
+
+  -- choose the followers: blank takes every idle turtle; a list of ids
+  -- takes only those, and the ORDER GIVEN is their placement order (the
+  -- order they stand in the row / take their tiles beside the leader)
+  local ordered = { leader }
+  if #others > 0 then
+    local raw = prompt(("followers, in placement order [%s]: "):format(table.concat(others, " ")))
+    if raw:match("%S") then
+      local seen = {}
+      for tok in raw:gmatch("%d+") do
+        local tid = tonumber(tok)
+        if tid ~= leader then -- the leader is always placement position 1
+          if seen[tid] then
+            pushNote(("#%d listed twice."):format(tid))
+            return
+          end
+          local okId = false
+          for _, a in ipairs(others) do if a == tid then okId = true end end
+          if not okId then
+            pushNote(("#%d is not an idle, online turtle."):format(tid))
+            return
+          end
+          seen[tid] = true
+          table.insert(ordered, tid)
+        end
+      end
+    else
+      for _, tid in ipairs(others) do table.insert(ordered, tid) end
+    end
   end
 
   local input = prompt(("tiled quarry, %d turtle(s) - <length> <width> [depth]: "):format(#ordered))
