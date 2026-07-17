@@ -41,7 +41,19 @@ for remote, localName in pairs(SETS[which]) do
   end
   local content = response.readAll()
   response.close()
+  -- an extensionless copy from an older install (e.g. "wb2master")
+  -- shadows the .lua name on the shell path, so the machine keeps
+  -- booting the OLD code no matter how often this runs; remove it
+  local bare = localName:gsub("%.lua$", "")
+  if bare ~= localName and fs.exists("/" .. bare) then
+    fs.delete("/" .. bare)
+    write("(removed old /" .. bare .. ") ")
+  end
   local f = fs.open("/" .. localName, "w")
+  if not f then
+    print("FAILED (cannot write /" .. localName .. ")")
+    return
+  end
   f.write(content)
   f.close()
   print("ok")
