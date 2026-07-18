@@ -1211,17 +1211,21 @@ addChest(-1, 0, 0)
 inv[1] = { name = "minecraft:coal", count = 64 }
 inv[2] = { name = "minecraft:coal", count = 40 }
 inv[3] = { name = "minecraft:lava_bucket", count = 1 }
+inv[4] = { name = "minecraft:coal_block", count = 10 } -- 9 coal each: over the cap
 world[key(1, 1, 0)] = "minecraft:obsidian" -- dug en route; must be hauled, never junked
 logClear()
 runWB2("set", "STRIP_VEIN", "false")
 runWB2("strip", "2")
 check(countInvItem("minecraft:coal") == 64, "exactly one stack of coal kept aboard")
-local coalInChest, obsidianInChest = 0, 0
+check(countInvItem("minecraft:coal_block") == 0, "coal blocks (9 coal each) over the cap all unloaded")
+local coalInChest, blocksInChest, obsidianInChest = 0, 0, 0
 for _, s in ipairs(containers[key(-1, 0, 0)]) do
   if s.name == "minecraft:coal" then coalInChest = coalInChest + s.count end
+  if s.name == "minecraft:coal_block" then blocksInChest = blocksInChest + s.count end
   if s.name == "minecraft:obsidian" then obsidianInChest = obsidianInChest + s.count end
 end
 check(coalInChest == 40, "the surplus 40 coal went into the chest")
+check(blocksInChest == 10, "the coal blocks went into the chest")
 check(obsidianInChest == 1, "obsidian hauled home, not discarded as junk")
 check(countInvItem("minecraft:lava_bucket") == 1, "lava bucket (fuel, but a bucket) stays aboard")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")

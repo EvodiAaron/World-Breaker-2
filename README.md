@@ -168,8 +168,10 @@ which is guaranteed hauled home even if a junk list ever matches it.
 **Coal doesn't pile up.** Fuel items are keep-items, but only **one
 stack's worth stays aboard** — any coal beyond 64 goes into the chest on
 every unload, so a turtle chewing through a coal seam still delivers it
-instead of hoarding a full inventory of fuel forever. (The empty/lava
-bucket is exempt: losing the bucket would break `LAVA_REFUEL`.)
+instead of hoarding a full inventory of fuel forever. Coal **blocks**
+count as nine coal each toward that cap (so at most 7 stay when they're
+all the fuel aboard). The empty/lava bucket is exempt: losing the bucket
+would break `LAVA_REFUEL`.
 
 Notable behaviors, all automatic: gravel/sand columns, mobs in the way,
 and full task resume after reboot/chunk-unload via `/wb2data/state`.

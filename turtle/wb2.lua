@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.9" -- shown on the master's info screen; bump on release
+local VERSION = "1.10" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1042,7 +1042,8 @@ end
 -- exempt (a lava bucket is fuel, but losing the bucket breaks LAVA_REFUEL).
 local function unloadInto(dropFn)
   local full = false
-  local fuelKept = 0
+  local fuelKept = 0 -- in plain-coal equivalents; a coal block is nine coal,
+                     -- so a stack of blocks can't slip past the one-stack cap
   for slot = 1, 16 do
     local d = turtle.getItemDetail(slot)
     if d then
@@ -1050,8 +1051,9 @@ local function unloadInto(dropFn)
         turtle.select(slot)
         if not dropFn() then full = true end
       elseif isFuelItem(d.name) and not isBucket(d.name) then
-        local keep = math.min(d.count, math.max(0, 64 - fuelKept))
-        fuelKept = fuelKept + keep
+        local unit = pathOf(d.name):find("coal_block") and 9 or 1
+        local keep = math.min(d.count, math.max(0, math.floor((64 - fuelKept) / unit)))
+        fuelKept = fuelKept + keep * unit
         if d.count > keep then
           turtle.select(slot)
           if not dropFn(d.count - keep) then full = true end
