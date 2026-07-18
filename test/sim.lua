@@ -194,18 +194,20 @@ function turtle.place() return placeAt(ahead()) end
 function turtle.placeDown() return placeAt(tpos.x, tpos.y - 1, tpos.z) end
 function turtle.placeUp() return placeAt(tpos.x, tpos.y + 1, tpos.z) end
 
-local function dropInto(x, y, z)
+local function dropInto(x, y, z, n)
   local s = inv[selected]
   if not s then return false end
+  n = math.min(n or s.count, s.count) -- turtle.drop([count]) drops part of the stack
+  if n <= 0 then return true end
   local c = containers[key(x, y, z)]
-  if c then table.insert(c, { name = s.name, count = s.count }) end
+  if c then table.insert(c, { name = s.name, count = n }) end
   -- no container = dropped into the void
-  inv[selected] = nil
+  if n >= s.count then inv[selected] = nil else s.count = s.count - n end
   return true
 end
-function turtle.drop() return dropInto(ahead()) end
-function turtle.dropDown() return dropInto(tpos.x, tpos.y - 1, tpos.z) end
-function turtle.dropUp() return dropInto(tpos.x, tpos.y + 1, tpos.z) end
+function turtle.drop(n) local x, y, z = ahead() return dropInto(x, y, z, n) end
+function turtle.dropDown(n) return dropInto(tpos.x, tpos.y - 1, tpos.z, n) end
+function turtle.dropUp(n) return dropInto(tpos.x, tpos.y + 1, tpos.z, n) end
 
 local function addStack(name, count)
   for i = 1, 16 do
@@ -1196,6 +1198,32 @@ check(countInvItem("minecraft:mob_spawner") == 0, "no spawner in the loot")
 check(world[key(2, -2, 1)] == nil, "cells beyond the spawner still mined")
 check(world[key(0, -2, 0)] == nil, "layers below the spawner level still mined")
 check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 32: surplus coal is unloaded, one stack kept ----------
+-- coal is a keep-item (it's fuel), but dug-up coal must not accumulate
+-- forever: everything beyond one stack goes into the chest on unload
+print("scenario: coal beyond one stack is unloaded at the home chest")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+inv[1] = { name = "minecraft:coal", count = 64 }
+inv[2] = { name = "minecraft:coal", count = 40 }
+inv[3] = { name = "minecraft:lava_bucket", count = 1 }
+world[key(1, 1, 0)] = "minecraft:obsidian" -- dug en route; must be hauled, never junked
+logClear()
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "2")
+check(countInvItem("minecraft:coal") == 64, "exactly one stack of coal kept aboard")
+local coalInChest, obsidianInChest = 0, 0
+for _, s in ipairs(containers[key(-1, 0, 0)]) do
+  if s.name == "minecraft:coal" then coalInChest = coalInChest + s.count end
+  if s.name == "minecraft:obsidian" then obsidianInChest = obsidianInChest + s.count end
+end
+check(coalInChest == 40, "the surplus 40 coal went into the chest")
+check(obsidianInChest == 1, "obsidian hauled home, not discarded as junk")
+check(countInvItem("minecraft:lava_bucket") == 1, "lava bucket (fuel, but a bucket) stays aboard")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------

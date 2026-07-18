@@ -162,7 +162,14 @@ wb2 set VEIN_DEPTH 16           -- how far to chase ore veins
 `JUNK` list (cobble, stone, dirt, gravel, sand, ...) *plus* decorative
 stones from any mod matched by name (`JUNK_MATCH`: andesite, diorite,
 granite, basalt, marble, limestone, tuff, slate). Anything ore-like is
-never discarded, whatever it's called.
+never discarded, whatever it's called — and neither is **obsidian**,
+which is guaranteed hauled home even if a junk list ever matches it.
+
+**Coal doesn't pile up.** Fuel items are keep-items, but only **one
+stack's worth stays aboard** — any coal beyond 64 goes into the chest on
+every unload, so a turtle chewing through a coal seam still delivers it
+instead of hoarding a full inventory of fuel forever. (The empty/lava
+bucket is exempt: losing the bucket would break `LAVA_REFUEL`.)
 
 Notable behaviors, all automatic: gravel/sand columns, mobs in the way,
 and full task resume after reboot/chunk-unload via `/wb2data/state`.

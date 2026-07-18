@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.8" -- shown on the master's info screen; bump on release
+local VERSION = "1.9" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -356,6 +356,7 @@ end
 
 local function isJunk(name)
   if isValuable(name) then return false end -- never discard something ore-like
+  if pathOf(name):find("obsidian") then return false end -- always worth hauling
   if listHas(cfg.JUNK, name) then return true end
   local p = pathOf(name)
   for _, sub in ipairs(cfg.JUNK_MATCH) do
@@ -1035,14 +1036,27 @@ end
 
 -- ================= unloading =================
 
--- drop everything that isn't a keep-item using dropFn; false if the container filled up
+-- drop everything that isn't a keep-item using dropFn; false if the container filled up.
+-- Fuel is a keep-item but only ONE stack's worth stays aboard: dug-up coal
+-- would otherwise accumulate forever and never reach the chest. Buckets are
+-- exempt (a lava bucket is fuel, but losing the bucket breaks LAVA_REFUEL).
 local function unloadInto(dropFn)
   local full = false
+  local fuelKept = 0
   for slot = 1, 16 do
     local d = turtle.getItemDetail(slot)
-    if d and not isKeepItem(d.name) then
-      turtle.select(slot)
-      if not dropFn() then full = true end
+    if d then
+      if not isKeepItem(d.name) then
+        turtle.select(slot)
+        if not dropFn() then full = true end
+      elseif isFuelItem(d.name) and not isBucket(d.name) then
+        local keep = math.min(d.count, math.max(0, 64 - fuelKept))
+        fuelKept = fuelKept + keep
+        if d.count > keep then
+          turtle.select(slot)
+          if not dropFn(d.count - keep) then full = true end
+        end
+      end
     end
   end
   turtle.select(1)
