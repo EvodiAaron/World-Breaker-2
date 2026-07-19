@@ -295,6 +295,12 @@ Fleet controls (keyboard only):
   - **With GPS**: the master reads the leader's position + facing and the
     followers **walk to their tile corners themselves**, digging through
     whatever is in the way — they can start scattered anywhere in range.
+    Every muster (and every world-coordinate `goto`) **calibrates fresh
+    and verifies arrival against a second GPS fix** — a saved calibration
+    is never trusted, because a turtle that was just picked up and
+    re-placed still remembers where it *used* to live. If GPS keeps
+    disagreeing, the turtle stops and reports blocked instead of
+    marching off into unloaded chunks.
   - **Without GPS (line mode)**: place the turtles in one row first — each
     directly beside the previous, in the order the plan screen lists, all
     facing the same way as the leader — and they shift themselves apart

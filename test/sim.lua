@@ -1230,6 +1230,38 @@ check(obsidianInChest == 1, "obsidian hauled home, not discarded as junk")
 check(countInvItem("minecraft:lava_bucket") == 1, "lava bucket (fuel, but a bucket) stays aboard")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 33: stale calibration must never steer a muster ----------
+-- the field bug: a turtle carries a saved GPS calibration from where it
+-- USED to live, gets hand-placed at a new site, boots (startup runs
+-- `resume`), and a GPS muster then computed its target against the old
+-- anchor - marching the turtle off into unloaded chunks. The boot path
+-- must reset the frame, and muster/goto must calibrate fresh + verify.
+print("scenario: hand-moved turtle with stale calibration musters correctly")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+files["/wb2data/state"] = textutils.serialize({
+  pos = { x = 0, y = 0, z = 0 },
+  heading = 0,
+  task = nil, -- previous job finished; nothing to resume
+  -- anchor from its old home, ~1100 blocks from where it now stands
+  calib = { offset = 2, worldAt = { x = 600, y = 60, z = -400 },
+            relAt = { x = 0, y = 0, z = 0 } },
+  haul = { total = 0, ores = {} },
+})
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "muster", x = 102, y = 60, z = 201, face = 0 } })
+shutdownWhen = function(msg) return msg.state == "ready" end
+runWB2("resume") -- what startup actually runs on every boot
+check(tpos.x == 2 and tpos.y == 0 and tpos.z == 1,
+  "turtle at the true world target, not where the stale anchor pointed")
+check(thead == 0, "turtle faces the requested world heading")
+local readySent33 = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.kind == "ready" then readySent33 = true end
+end
+check(readySent33, "ready reported back to the master")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

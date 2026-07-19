@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.10" -- shown on the master's info screen; bump on release
+local VERSION = "1.11" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -756,7 +756,7 @@ end
 -- a boxed-in turtle just stays on dead reckoning.
 local function calibrate(gentle)
   if not hasModem then return end
-  local x, y, z = gps.locate(1)
+  local x, y, z = gps.locate(2)
   if not x then return end
   local before = { x = pos.x, y = pos.y, z = pos.z }
   local h = heading
@@ -767,7 +767,7 @@ local function calibrate(gentle)
   else
     if not tryForward() then return end
   end
-  local x2, y2, z2 = gps.locate(1)
+  local x2, y2, z2 = gps.locate(2)
   if dirSign == 1 then tryBack() else tryForward() end
   if not x2 then return end
   local dx, dz = (x2 - x) * dirSign, (z2 - z) * dirSign
@@ -784,6 +784,36 @@ local function calibrate(gentle)
   }
   saveState()
   note(("GPS calibrated: %d, %d, %d"):format(x, y, z))
+end
+
+-- Travel to absolute WORLD coordinates. A stored calibration is never
+-- trusted for this: the turtle may have been picked up and re-placed
+-- since it was learned (that is exactly how multi-quarries get set up),
+-- and a stale anchor sends it marching into the wilderness. So:
+-- calibrate fresh, walk, then VERIFY with a new fix and retry if the
+-- world disagrees. Returns true at the target, else false + reason.
+local function worldArrive(wx, wy, wz)
+  local lastWhy = "no GPS fix here"
+  for _ = 1, 3 do
+    calib = nil
+    pcall(calibrate, true)             -- prefer the never-dig step
+    if not calib then pcall(calibrate) end -- boxed in: one dug step is fine here
+    local target = calib and relFromWorld({ x = wx, y = wy, z = wz })
+    if target then
+      goTo(target)
+      local x, y, z = gps.locate(2)
+      if not x then -- lost GPS on the way: dead reckoning is all we have
+        return pos.x == target.x and pos.y == target.y and pos.z == target.z,
+               "lost the GPS signal on the way"
+      end
+      if x == wx and y == wy and z == wz then return true end
+      lastWhy = ("GPS puts me at %d,%d,%d"):format(x, y, z)
+      note(("not at %d,%d,%d yet (%s) - recalibrating"):format(wx, wy, wz, lastWhy))
+    else
+      sleep(2) -- no fix / boxed in; give a laggy server a breath and retry
+    end
+  end
+  return false, lastWhy
 end
 
 -- re-anchor the relative frame at the current position/heading (new home)
@@ -1491,21 +1521,22 @@ local function runStrip()
 end
 
 local function runGoto()
-  local target
-  if task.world then
-    target = relFromWorld({ x = task.x, y = task.y, z = task.z })
-    if not target then
-      note("Cannot go to world coords: no GPS calibration")
-      task = nil
-      saveState()
-      setStatus("idle")
-      return
-    end
-  else
-    target = { x = task.x, y = task.y, z = task.z }
-  end
   setStatus("goto", ("%d, %d, %d"):format(task.x, task.y, task.z))
-  goTo(target)
+  if task.world then
+    -- world coordinates: calibrate fresh + verify arrival (worldArrive);
+    -- a stale stored calibration must never pick the direction here
+    local ok, why = worldArrive(task.x, task.y, task.z)
+    task = nil
+    saveState()
+    if ok then
+      setStatus("idle", "arrived")
+    else
+      note(("goto gave up: %s"):format(why or "no GPS"))
+      setStatus("blocked", why or "no GPS")
+    end
+    return
+  end
+  goTo({ x = task.x, y = task.y, z = task.z })
   task = nil
   saveState()
   setStatus("idle", "arrived")
@@ -1535,24 +1566,20 @@ local function runMuster()
       face(h)
     end
   else
-    -- GPS mode: travel to absolute coordinates and face the given way
+    -- GPS mode: travel to absolute coordinates and face the given way.
+    -- worldArrive calibrates FRESH and verifies arrival with a new fix -
+    -- turtles are usually hand-placed just before a muster, so any
+    -- stored calibration likely describes wherever they used to live
     setStatus("muster", ("to %d,%d,%d"):format(task.x, task.y, task.z))
-    if not calib then pcall(calibrate) end
-    local target = calib and relFromWorld({ x = task.x, y = task.y, z = task.z })
-    if not target then
-      note("muster needs GPS - place me at my tile by hand instead")
-      task = nil
-      saveState()
-      setStatus("idle")
-      return
-    end
-    if not goTo(target) then
+    local ok, why = worldArrive(task.x, task.y, task.z)
+    if not ok then
+      note(("muster failed: %s - place me at my tile by hand instead"):format(why or "no GPS"))
       setStatus("blocked", "cannot reach my tile - move me by hand")
       task = nil
       saveState()
       return
     end
-    if task.face then face((task.face - calib.offset) % 4) end
+    if task.face and calib then face((task.face - calib.offset) % 4) end
   end
   task = nil
   saveState()
@@ -1938,7 +1965,15 @@ elseif verb == "resume" then
     if not hasModem then return end
     print("Listening for master commands instead.")
     setStatus("idle")
-    if not calib then pcall(calibrate, true) end -- orient if GPS is up
+    -- No task means this boot may well be a hand re-placement somewhere
+    -- new: the saved frame (pos/heading/calib) could describe wherever
+    -- the turtle USED to live. Start the frame from scratch here and
+    -- re-orient via GPS if it's reachable.
+    pos = { x = 0, y = 0, z = 0 }
+    heading = 0
+    calib = nil
+    saveState()
+    pcall(calibrate, true)
   else
     -- fix any drift from a mid-move server stop, if GPS is reachable
     if hasModem and calib then
