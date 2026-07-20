@@ -1262,6 +1262,67 @@ for _, s in ipairs(rednetSent) do
 end
 check(readySent33, "ready reported back to the master")
 
+-- ---------- scenario 34: a lying calibration must not teleport a resume ----------
+-- the field bug: a mid-quarry turtle reboots (chunk unload) carrying a
+-- stale anchor; the boot drift-fix computed pos through it, teleporting
+-- the turtle's BELIEF ~700 blocks - it then bored a tunnel toward a
+-- phantom cell until its fuel died. A big GPS-vs-anchor disagreement
+-- must drop the anchor and keep dead reckoning instead.
+print("scenario: resume with a lying calibration keeps dead reckoning")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+fillGround(-3, 5, -3, 5, -6, -1)
+addChest(-1, 0, 0)
+world[key(1, 0, 0)] = nil -- the turtle stands mid-quarry, cell already dug
+tpos = { x = 1, y = 0, z = 0 }
+files["/wb2data/state"] = textutils.serialize({
+  pos = { x = 1, y = 0, z = 0 }, -- dead reckoning is CORRECT
+  heading = 0,
+  task = { kind = "quarry", l = 2, w = 2, depth = 2, layer = 0, cell = 0,
+           paused = false },
+  calib = { offset = 1, worldAt = { x = 700, y = 60, z = 300 }, -- old life, ~700 blocks off
+            relAt = { x = 0, y = 0, z = 0 } },
+  haul = { total = 0, ores = {} },
+})
+logClear()
+shutdownWhen = function(msg) return msg.state == "done" end
+runWB2("resume")
+check(logHas("disagrees with reality"), "lying calibration detected and dropped")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0,
+  "turtle finished at its REAL home, not a phantom one")
+local q34 = true
+for x = 0, 1 do for z = 0, 1 do for y = 0, -1, -1 do
+  if world[key(x, y, z)] then q34 = false end
+end end end
+check(q34, "the quarry it was resuming got finished in place")
+
+-- ---------- scenario 35: honest 1-block drift is still corrected ----------
+-- the drift-fix exists for real mid-move server stops; a small
+-- disagreement (anchor healthy, one move lost) must still be applied
+print("scenario: resume corrects genuine 1-block drift via GPS")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+fillGround(-3, 5, -3, 5, -6, -1)
+addChest(-1, 0, 0)
+world[key(1, 0, 0)] = nil
+world[key(2, 0, 0)] = nil
+tpos = { x = 2, y = 0, z = 0 } -- physically one block FURTHER than believed
+files["/wb2data/state"] = textutils.serialize({
+  pos = { x = 1, y = 0, z = 0 }, -- the move lost to the server stop
+  heading = 0,
+  task = { kind = "quarry", l = 2, w = 2, depth = 2, layer = 0, cell = 0,
+           paused = false },
+  calib = { offset = 0, worldAt = { x = 100, y = 60, z = 200 }, -- healthy anchor
+            relAt = { x = 0, y = 0, z = 0 } },
+  haul = { total = 0, ores = {} },
+})
+shutdownWhen = function(msg) return msg.state == "done" end
+runWB2("resume")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0,
+  "turtle home exactly, off-by-one corrected before resuming")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

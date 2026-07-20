@@ -300,7 +300,13 @@ Fleet controls (keyboard only):
     is never trusted, because a turtle that was just picked up and
     re-placed still remembers where it *used* to live. If GPS keeps
     disagreeing, the turtle stops and reports blocked instead of
-    marching off into unloaded chunks.
+    marching off into unloaded chunks. The same distrust applies
+    mid-task: **starting any task drops the old anchor and re-learns it
+    fresh**, and the boot-time GPS drift correction (after a chunk
+    unload mid-job) only accepts *small* nudges — a big disagreement
+    means the saved anchor is lying, so it's dropped and the turtle
+    carries on by dead reckoning instead of teleporting its belief and
+    boring a tunnel toward a phantom target.
   - **Without GPS (line mode)**: place the turtles in one row first — each
     directly beside the previous, in the order the plan screen lists, all
     facing the same way as the leader — and they shift themselves apart

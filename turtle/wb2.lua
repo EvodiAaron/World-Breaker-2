@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.11" -- shown on the master's info screen; bump on release
+local VERSION = "1.12" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1679,6 +1679,10 @@ local function coerce(v)
 end
 
 local function startTask(t)
+  calib = nil -- never carry an old anchor into a task: it steers every
+              -- boot-time GPS position fix for the whole run, and a stale
+              -- one (turtle hand-moved since it was learned) teleports the
+              -- turtle's belief. Re-learn fresh, or mine on dead reckoning.
   rebase()
   pcall(calibrate) -- calibration moves the turtle; never let a fuel interrupt escape here
   haul = { total = 0, ores = {} }
@@ -1975,12 +1979,26 @@ elseif verb == "resume" then
     saveState()
     pcall(calibrate, true)
   else
-    -- fix any drift from a mid-move server stop, if GPS is reachable
+    -- Fix any drift from a mid-move server stop, if GPS is reachable.
+    -- The saved calibration steers this correction, so it is trusted
+    -- for SMALL nudges only: a server stop loses a move or two, while
+    -- a big disagreement means the anchor itself is wrong - obeying it
+    -- teleports the turtle's belief and sends it boring a tunnel toward
+    -- a phantom target. Drop a lying anchor; dead reckoning is safer.
     if hasModem and calib then
-      local x, y, z = gps.locate(1)
+      local x, y, z = gps.locate(2)
       if x then
         local rel = relFromWorld({ x = x, y = y, z = z })
-        if rel then pos = rel saveState() end
+        local d = rel and (math.abs(rel.x - pos.x) + math.abs(rel.y - pos.y)
+                         + math.abs(rel.z - pos.z))
+        if d and d > 0 and d <= 8 then
+          pos = rel
+          saveState()
+        elseif d and d > 8 then
+          calib = nil
+          saveState()
+          note("saved GPS calibration disagrees with reality - dropped it")
+        end
       end
     end
     setStatus(task.paused and "paused" or "resuming",
