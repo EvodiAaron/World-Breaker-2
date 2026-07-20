@@ -1323,6 +1323,31 @@ runWB2("resume")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0,
   "turtle home exactly, off-by-one corrected before resuming")
 
+-- ---------- scenario 36: pose reply is tagged and reports the SETTLED spot ----------
+-- multi-quarry anchors every follower tile to the leader's pose; the
+-- reply must carry poseReply=true (so the master can tell it apart from
+-- a heartbeat fired mid-wiggle) and must report the position the turtle
+-- settles back on - here the wiggle is forced BACKWARD by a chest ahead
+print("scenario: pose reply tagged, settled position reported after the wiggle")
+resetWorld()
+modemSide = "left"
+gpsEnabled = true
+addChest(1, 0, 0) -- forward blocked (never dug): gentle step goes backward
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "pose" } })
+shutdownWhen = function(msg) return msg.poseReply end
+runWB2("listen")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle settled back on its spot")
+check(world[key(1, 0, 0)] == "minecraft:chest", "chest ahead was not dug")
+local poseMsg
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.poseReply then poseMsg = s.msg end
+end
+check(poseMsg ~= nil, "pose reply carries the poseReply tag")
+check(poseMsg and poseMsg.world and poseMsg.world.x == 100 and poseMsg.world.z == 200,
+  "pose reply reports the settled position, not the displaced one")
+check(poseMsg and poseMsg.worldHeading ~= nil, "pose reply includes the world heading")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.12" -- shown on the master's info screen; bump on release
+local VERSION = "1.13" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1747,7 +1747,13 @@ local function handleCmd(sender, msg)
     if not (task and not task.paused) then
       pcall(calibrate, true)
     end
-    rednet.send(sender, buildStatus(), PROTO_STATUS)
+    -- tag the reply: the master must anchor multi-quarry tiles to THIS
+    -- settled answer. The 5s heartbeat can fire mid-calibration (all
+    -- turtle ops yield) while we stand one block displaced - anchoring
+    -- to that put every follower tile one block off.
+    local st = buildStatus()
+    st.poseReply = true
+    rednet.send(sender, st, PROTO_STATUS)
 
   elseif msg.cmd == "goto" then
     if task and not task.paused then

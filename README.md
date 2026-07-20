@@ -306,7 +306,11 @@ Fleet controls (keyboard only):
     unload mid-job) only accepts *small* nudges — a big disagreement
     means the saved anchor is lying, so it's dropped and the turtle
     carries on by dead reckoning instead of teleporting its belief and
-    boring a tunnel toward a phantom target.
+    boring a tunnel toward a phantom target. The tile layout is anchored
+    only to the leader's **tagged pose reply** — never to a routine
+    heartbeat, which can be broadcast mid-calibration while the leader
+    stands one block displaced (this used to shift every follower tile
+    one block back).
   - **Without GPS (line mode)**: place the turtles in one row first — each
     directly beside the previous, in the order the plan screen lists, all
     facing the same way as the leader — and they shift themselves apart

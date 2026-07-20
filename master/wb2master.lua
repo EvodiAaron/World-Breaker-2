@@ -760,7 +760,11 @@ local function multiQuarry()
     if ev[1] == "rednet_message" then
       ingest(ev[2], ev[3], ev[4])
       local msg = ev[3]
-      if ev[2] == leader and type(msg) == "table" and msg.world and msg.worldHeading then
+      -- only the TAGGED pose reply may anchor the tiles: an untagged
+      -- heartbeat can be broadcast mid-calibration, while the leader
+      -- stands one block displaced from where it will settle
+      if ev[2] == leader and type(msg) == "table" and msg.poseReply
+         and msg.world and msg.worldHeading then
         pose = msg
         break
       end
