@@ -28,7 +28,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.13" -- shown on the master's info screen; bump on release
+local VERSION = "1.14" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1729,16 +1729,28 @@ local function handleCmd(sender, msg)
     end
 
   elseif msg.cmd == "muster" then
-    -- multi-quarry positioning: move to the assigned tile, report ready,
-    -- and wait; the master sends start once every turtle is in place
+    -- Multi-quarry positioning: move to the assigned tile, report ready,
+    -- and wait; the master sends start once every turtle is in place.
+    -- The task starts PAUSED: it records the assignment and acks
+    -- "queued" without moving a single block. Movement (including the
+    -- GPS calibration wiggle) only begins once the master's `resume`
+    -- arrives, once EVERY follower has confirmed its assignment -
+    -- otherwise an early mover's dig-through or calibration step could
+    -- displace it just as a slower mover sweeps the same ground,
+    -- scrambling which turtle ends up on which tile.
     if task and not task.paused then
       reply("busy - stop me first")
       return
     end
     task = { kind = "muster", x = msg.x, y = msg.y, z = msg.z,
-             face = msg.face, right = msg.right, master = sender }
+             face = msg.face, right = msg.right, master = sender,
+             paused = true }
     saveState()
-    reply("mustering")
+    setStatus("queued", "waiting for the rest of the fleet before moving")
+    if hasModem then
+      rednet.send(sender, { kind = "queued", id = os.getComputerID(),
+                            label = os.getComputerLabel() }, PROTO_STATUS)
+    end
 
   elseif msg.cmd == "pose" then
     -- refresh GPS calibration and report back (position + world heading);

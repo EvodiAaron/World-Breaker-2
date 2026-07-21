@@ -1017,6 +1017,19 @@ check(marbleInChest + countInvItem("chisel:marble") > 0,
   "marble hauled home with DROP_JUNK off")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- a `when` predicate for rednetQueue: fires once the turtle has sent a
+-- reply of the given `kind` (used to inject the master's `resume` only
+-- after the turtle has queued its assignment, mirroring the real two-
+-- phase muster barrier)
+local function sentKind(kind)
+  return function()
+    for _, s in ipairs(rednetSent) do
+      if type(s.msg) == "table" and s.msg.kind == kind then return true end
+    end
+    return false
+  end
+end
+
 -- ---------- scenario 22: muster to a world position (GPS mode) ----------
 print("scenario: muster (GPS): walk to world coords, face the given heading")
 resetWorld()
@@ -1025,6 +1038,8 @@ gpsEnabled = true
 thead = 1  -- the turtle's own frame differs from the world frame
 table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
   msg = { cmd = "muster", x = 103, y = 60, z = 205, face = 2 } })
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5, when = sentKind("queued"),
+  msg = { cmd = "resume" } })
 shutdownWhen = function(msg) return msg.state == "ready" end
 runWB2("listen")
 check(tpos.x == 3 and tpos.y == 0 and tpos.z == 5, "turtle at the mustered world position")
@@ -1041,6 +1056,8 @@ resetWorld()
 modemSide = "left"
 table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
   msg = { cmd = "muster", right = 3 } })
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5, when = sentKind("queued"),
+  msg = { cmd = "resume" } })
 shutdownWhen = function(msg) return msg.state == "ready" end
 runWB2("listen")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 3, "turtle shifted 3 blocks to its right")
@@ -1251,6 +1268,8 @@ files["/wb2data/state"] = textutils.serialize({
 })
 table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
   msg = { cmd = "muster", x = 102, y = 60, z = 201, face = 0 } })
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5, when = sentKind("queued"),
+  msg = { cmd = "resume" } })
 shutdownWhen = function(msg) return msg.state == "ready" end
 runWB2("resume") -- what startup actually runs on every boot
 check(tpos.x == 2 and tpos.y == 0 and tpos.z == 1,
@@ -1347,6 +1366,29 @@ check(poseMsg ~= nil, "pose reply carries the poseReply tag")
 check(poseMsg and poseMsg.world and poseMsg.world.x == 100 and poseMsg.world.z == 200,
   "pose reply reports the settled position, not the displaced one")
 check(poseMsg and poseMsg.worldHeading ~= nil, "pose reply includes the world heading")
+
+-- ---------- scenario 37: muster holds still until the master says go ----------
+-- the field bug: followers began their calibration wiggle / dig-through
+-- the instant they received their OWN muster assignment, with no regard
+-- for whether the rest of the fleet was ready - one turtle's early
+-- shuffle could displace it just as a slower one swept the same ground,
+-- scrambling which turtle ended up on which tile. A muster must now ack
+-- "queued" and sit COMPLETELY STILL until the master's `resume` arrives.
+print("scenario: muster acks queued and holds still until resume arrives")
+resetWorld()
+modemSide = "left"
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "muster", right = 3 } })
+logClear()
+shutdownWhen = function(msg) return msg.state == "queued" end
+runWB2("listen")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle has NOT moved - still waiting for resume")
+local queuedSent = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.kind == "queued" then queuedSent = true end
+end
+check(queuedSent, "queued ack sent immediately, before any movement")
+check(logHas("waiting for the rest of the fleet"), "status shows it is holding for the fleet")
 
 -- ---------- summary ----------
 print("")

@@ -797,9 +797,10 @@ local function multiQuarry()
   setColor(colors.lightGray)
   print("")
   if pose then
-    print("Followers dig straight to their tile corners and")
-    print("wait there. Nothing is mined until every one has")
-    print("reported in position.")
+    print("Followers wait for everyone to confirm before ANY")
+    print("of them moves, then dig straight to their tile")
+    print("corners together. Nothing is mined until every one")
+    print("has reported in position.")
   else
     print("Place the turtles FIRST, in the order listed:")
     print(("- one row, each directly %s of the previous"):format(
@@ -818,8 +819,38 @@ local function multiQuarry()
     return
   end
 
-  -- send the followers to their tiles and wait for every "ready"
-  local waiting, nWaiting = {}, 0
+  -- Wait for a `kind` reply from every id in `ids`; returns false (having
+  -- sent abort to whoever hadn't replied) if the user presses q.
+  local function waitForAll(ids, kind, verb)
+    local waiting, nWaiting = {}, 0
+    for _, id in ipairs(ids) do waiting[id] = true nWaiting = nWaiting + 1 end
+    while nWaiting > 0 do
+      local _, hh = term.getSize()
+      term.setCursorPos(1, hh)
+      term.clearLine()
+      setColor(colors.orange)
+      write(("waiting for %d turtle(s) to %s... (q aborts)"):format(nWaiting, verb))
+      local ev = { os.pullEvent() }
+      if ev[1] == "rednet_message" then
+        local sender, msg = ev[2], ev[3]
+        ingest(sender, msg, ev[4])
+        if type(msg) == "table" and msg.kind == kind and waiting[sender] then
+          waiting[sender] = nil
+          nWaiting = nWaiting - 1
+        end
+      elseif ev[1] == "modem_message" then
+        recordDistance(ev)
+      elseif ev[1] == "char" and ev[2] == "q" then
+        for tid in pairs(waiting) do rednet.send(tid, { cmd = "abort" }, PROTO_CMD) end
+        return false
+      end
+    end
+    return true
+  end
+
+  -- Phase 1: hand out tile assignments. Each follower stores its task
+  -- PAUSED and acks "queued" without moving a single block yet.
+  local ids = {}
   for i = 2, n do
     local p = plan[i]
     local m
@@ -835,30 +866,23 @@ local function multiQuarry()
       m = { cmd = "muster", right = side * (p.off - (i - 1)) }
     end
     rednet.send(p.id, m, PROTO_CMD)
-    waiting[p.id] = true
-    nWaiting = nWaiting + 1
+    table.insert(ids, p.id)
   end
-  while nWaiting > 0 do
-    local _, hh = term.getSize()
-    term.setCursorPos(1, hh)
-    term.clearLine()
-    setColor(colors.orange)
-    write(("waiting for %d turtle(s) to reach position... (q aborts)"):format(nWaiting))
-    local ev = { os.pullEvent() }
-    if ev[1] == "rednet_message" then
-      local sender, msg = ev[2], ev[3]
-      ingest(sender, msg, ev[4])
-      if type(msg) == "table" and msg.kind == "ready" and waiting[sender] then
-        waiting[sender] = nil
-        nWaiting = nWaiting - 1
-      end
-    elseif ev[1] == "modem_message" then
-      recordDistance(ev)
-    elseif ev[1] == "char" and ev[2] == "q" then
-      for tid in pairs(waiting) do rednet.send(tid, { cmd = "abort" }, PROTO_CMD) end
-      pushNote("Tiled quarry cancelled while mustering")
-      return
-    end
+  if not waitForAll(ids, "queued", "confirm their assignment") then
+    pushNote("Tiled quarry cancelled while mustering")
+    return
+  end
+
+  -- Phase 2: release everyone to move AT ONCE - no follower starts its
+  -- calibration wiggle or dig-through while another is still standing
+  -- by, which is what let one turtle's shuffle knock a slower one out
+  -- of its assigned order.
+  for _, id in ipairs(ids) do rednet.send(id, { cmd = "resume" }, PROTO_CMD) end
+
+  -- Phase 3: wait for every follower to actually arrive.
+  if not waitForAll(ids, "ready", "reach position") then
+    pushNote("Tiled quarry cancelled while mustering")
+    return
   end
 
   -- everyone is in position: fire the actual quarries

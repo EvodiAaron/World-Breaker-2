@@ -310,7 +310,12 @@ Fleet controls (keyboard only):
     only to the leader's **tagged pose reply** — never to a routine
     heartbeat, which can be broadcast mid-calibration while the leader
     stands one block displaced (this used to shift every follower tile
-    one block back).
+    one block back). And **no follower moves a single block until every
+    follower has confirmed its assignment**: each one acks "queued" and
+    sits perfectly still, then the master releases them all at once —
+    otherwise one turtle's early calibration wiggle or dig-through could
+    displace it just as a slower one swept the same ground, scrambling
+    which turtle ended up on which tile.
   - **Without GPS (line mode)**: place the turtles in one row first — each
     directly beside the previous, in the order the plan screen lists, all
     facing the same way as the leader — and they shift themselves apart
