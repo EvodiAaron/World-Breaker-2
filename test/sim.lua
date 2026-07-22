@@ -176,14 +176,23 @@ function turtle.attackDown() return false end
 local function placeAt(x, y, z)
   local name = inv[selected] and inv[selected].name
   if not name then return false end
-  -- an empty bucket "placed" against a lava source scoops it up
-  if name == "minecraft:bucket" and world[key(x, y, z)] == "minecraft:lava" then
+  local target = world[key(x, y, z)]
+  -- an empty bucket "placed" against a source scoops it up (only sources -
+  -- flowing lava/water silently fail to scoop, matching vanilla)
+  if name == "minecraft:bucket" and target == "minecraft:lava" then
     takeSelected()
     world[key(x, y, z)] = nil
     addItem("minecraft:lava_bucket")
     return true
   end
-  if world[key(x, y, z)] then return false end
+  if name == "minecraft:bucket" and target == "minecraft:water" then
+    takeSelected()
+    world[key(x, y, z)] = nil
+    addItem("minecraft:water_bucket")
+    return true
+  end
+  -- fluids are replaceable: a solid block can be placed straight into them
+  if target and not isFluid(target) then return false end
   takeSelected()
   world[key(x, y, z)] = name
   -- any mod's chest becomes a working container when placed
@@ -1389,6 +1398,101 @@ for _, s in ipairs(rednetSent) do
 end
 check(queuedSent, "queued ack sent immediately, before any movement")
 check(logHas("waiting for the rest of the fleet"), "status shows it is holding for the fleet")
+
+-- ---------- scenario 38: water source above a quarry -> dammed with a placed block ----------
+-- the water sits over column (1,0): the 2nd cell of a 2x2 footprint, never
+-- the home column (0,0) and never the last cell (0,1) - so it survives to
+-- be checked (a dam directly on the home/return path would legitimately
+-- get dug back out on the way home, same as any other mined block; that's
+-- correct behaviour, not a bug, but it makes a bad spot to assert from)
+print("scenario: water source above the quarry is dammed with a carried block (no bucket)")
+resetWorld()
+fillGround(-3, 5, -3, 5, -4, -1)
+addChest(-1, 0, 0)
+world[key(1, 0, 0)] = "minecraft:water" -- source sitting right at the top of the quarry
+inv[1] = { name = "minecraft:cobblestone", count = 10 }
+logClear()
+runWB2("quarry", "2", "2", "3")
+check(world[key(1, 0, 0)] == "minecraft:cobblestone", "water source plugged with a carried dam block")
+check(not logHas("could not be plugged"), "no fallback triggered - the source was reachable")
+check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 39: water source above a quarry -> scooped when a bucket is carried ----------
+print("scenario: a carried empty bucket is preferred over a dam block for a confirmed source")
+resetWorld()
+fillGround(-3, 5, -3, 5, -6, -1)
+addChest(-1, 0, 0)
+world[key(0, 0, 0)] = "minecraft:water"
+inv[1] = { name = "minecraft:bucket", count = 1 }
+inv[2] = { name = "minecraft:cobblestone", count = 10 } -- dam material also on hand
+logClear()
+runWB2("quarry", "1", "1", "3")
+check(world[key(0, 0, 0)] == nil, "the source was scooped away, not plugged with a block")
+check(countInvItem("minecraft:water_bucket") == 1, "the water bucket is kept, not junked")
+check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 40: flowing water chased one hop up to its source ----------
+print("scenario: flowing water directly above is chased one hop up to its true source")
+resetWorld()
+fillGround(-3, 5, -3, 5, -6, -1)
+addChest(-1, 0, 0)
+world[key(0, 0, 0)] = "minecraft:flowing_water" -- what the turtle sees first
+world[key(0, 1, 0)] = "minecraft:water"         -- the actual source, one hop further up
+inv[1] = { name = "minecraft:cobblestone", count = 10 }
+logClear()
+runWB2("quarry", "1", "1", "3")
+check(world[key(0, 1, 0)] == "minecraft:cobblestone", "the chase found and plugged the true source")
+check(not logHas("could not be plugged"), "the source was found within the search radius")
+check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 41: unreachable water source -> logged and left running ----------
+print("scenario: flowing water with no source in range is logged and left running")
+resetWorld()
+fillGround(-3, 5, -3, 5, -6, -1)
+addChest(-1, 0, 0)
+world[key(0, 0, 0)] = "minecraft:flowing_water" -- the direct target; nothing above it to chase
+world[key(1, 0, 0)] = "minecraft:stone"          -- cell 1: ordinary stone, should still get mined
+inv[1] = { name = "minecraft:cobblestone", count = 10 }
+logClear()
+runWB2("quarry", "2", "1", "3")
+check(logHas("could not be plugged"), "the unresolved flood was logged")
+check(logHas("quarry complete"), "the quarry still ran to completion, water left running")
+check(world[key(1, -1, 0)] == nil and world[key(1, -2, 0)] == nil,
+  "the unrelated cell was still mined normally")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 42: self-healing across a layer boundary ----------
+-- again over column (1,0), not the home/last column (0,1) - see scenario 38
+print("scenario: a source exposed only on the second layer pass is handled automatically")
+resetWorld()
+fillGround(-3, 5, -3, 5, -8, -1)
+addChest(-1, 0, 0)
+world[key(1, -3, 0)] = "minecraft:water" -- only reachable once the 2nd 3-layer pass begins
+logClear()
+runWB2("quarry", "2", "2", "6") -- depth 6 = two 3-layer passes over a 2x2 footprint
+check(world[key(1, -3, 0)] == "minecraft:cobblestone",
+  "the source was plugged automatically when the 2nd pass reached it, using mined-and-reserved cobblestone")
+check(not logHas("could not be plugged"), "the source was reachable and handled")
+check(logHas("quarry complete"), "quarry ran to completion")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 43: DAM_RESERVE survives ordinary junk-dropping ----------
+print("scenario: dropJunk holds back a DAM_RESERVE stock of dam material instead of discarding it all")
+resetWorld()
+fillGround(-3, 5, -3, 5, -4, -1)
+addChest(-1, 0, 0)
+logClear()
+runWB2("quarry", "2", "2", "3") -- 4 cells, 2 stone blocks each = 8 cobblestone mined
+check(countInvItem("minecraft:cobblestone") == 0, "everything aboard was unloaded at the end, as usual")
+local chestCobble = 0
+for _, s in ipairs(containers[key(-1, 0, 0)]) do
+  if s.name == "minecraft:cobblestone" then chestCobble = chestCobble + s.count end
+end
+check(chestCobble == 4, "only the last DAM_RESERVE(4) units survived dropJunk to be hauled home; the rest was junked mid-run")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------
 print("")

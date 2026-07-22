@@ -91,6 +91,11 @@ local cfg = {
   AUTO_RETURN     = true,    -- retreat home when fuel is only just enough to get back
                              -- (false = stop in place and wait to be fed instead)
   LAVA_REFUEL     = true,    -- scoop lava met while digging into a carried empty bucket
+  WATER_DAM       = true,    -- automatically seal water sources met while quarrying
+  WATER_SCOOP     = true,    -- prefer scooping a confirmed source over placing a dam block
+  DAM_RESERVE     = 4,       -- units of a dam material dropJunk() holds back
+  DAM_SEARCH_RADIUS = 3,     -- max hops chasing a source, in the direction it was detected
+  DAM_MAX_ATTEMPTS  = 2,     -- settle-recheck retries before giving up on a flood
   FUEL_RESERVE    = 60,      -- safety margin on top of the trip home
   REFUEL_TARGET   = 1000,    -- refuel to this level when waiting at home
   VEIN_DEPTH      = 12,      -- how far to chase an ore vein (strip mode)
@@ -114,6 +119,8 @@ local cfg = {
   EXTRA_LOGS      = {},                  -- crafting logs whose names don't contain "log"
   EXTRA_PLANKS    = {},                  -- crafting planks whose names don't contain "plank"
   ALERT_BLOCKS    = { "minecraft:diamond_ore", "minecraft:emerald_ore" }, -- announce these finds
+  DAM_BLOCKS      = { "minecraft:cobblestone", "minecraft:dirt",
+                      "minecraft:stone", "minecraft:netherrack" }, -- used to plug water sources
   MASTER_ID       = 0,                   -- 0 = obey any master; set to a computer ID to lock
 }
 
@@ -324,6 +331,22 @@ end
 
 local function isBucket(name)
   return name == "minecraft:bucket" or name == "minecraft:lava_bucket"
+      or name == "minecraft:water_bucket"
+end
+
+-- pre-1.13 Minecraft has separate registry names for still and flowing
+-- water, so the two are distinguishable without any blockstate lookup
+local function isWaterName(name)
+  return pathOf(name):find("water") ~= nil -- matches "water" and "flowing_water"
+end
+local function isWaterSource(name)
+  return pathOf(name) == "water" -- NOT flowing_water
+end
+
+local function isDamBlock(name)
+  -- falling blocks make bad dams: they'd just collapse into a fresh hole
+  if pathOf(name):find("gravel") or pathOf(name):find("sand") then return false end
+  return listHas(cfg.DAM_BLOCKS, name)
 end
 
 -- a Plethora block scanner module (1.12 module items all share one id)
@@ -390,15 +413,35 @@ local function countItems(matcher)
   return n
 end
 
--- throw away junk blocks (tries down, then up, then forward)
+-- throw away junk blocks (tries down, then up, then forward). When
+-- WATER_DAM is on, up to DAM_RESERVE units of whichever dam material the
+-- turtle is holding are kept back instead of junked, so plugging a water
+-- source doesn't depend on the player pre-loading cobblestone every trip.
 local function dropJunk()
   if not cfg.DROP_JUNK then return end
+  local reserveLeft = {} -- damBlock name -> reserve still unclaimed by an earlier slot
+  if cfg.WATER_DAM then
+    for slot = 1, 16 do
+      local d = turtle.getItemDetail(slot)
+      if d and isDamBlock(d.name) and reserveLeft[d.name] == nil then
+        reserveLeft[d.name] = cfg.DAM_RESERVE
+      end
+    end
+  end
   for slot = 1, 16 do
     local d = turtle.getItemDetail(slot)
     if d and isJunk(d.name) then
-      turtle.select(slot)
-      if not turtle.dropDown() then
-        if not turtle.dropUp() then turtle.drop() end
+      local dropCount = d.count
+      if cfg.WATER_DAM and isDamBlock(d.name) then
+        local keepHere = math.min(reserveLeft[d.name] or 0, d.count)
+        reserveLeft[d.name] = (reserveLeft[d.name] or 0) - keepHere
+        dropCount = d.count - keepHere
+      end
+      if dropCount > 0 then
+        turtle.select(slot)
+        if not turtle.dropDown(dropCount) then
+          if not turtle.dropUp(dropCount) then turtle.drop(dropCount) end
+        end
       end
     end
   end
@@ -452,18 +495,21 @@ local function recordDig(name)
   end
 end
 
--- ================= lava refueling =================
+-- ================= fluid handling (lava & water) =================
 
--- Fluids never register on turtle.detect(), so the dig helpers call this to
--- look for lava by inspection. A source block scooped with a carried empty
--- bucket is 1,000 fuel; scooping flowing (non-source) lava fails harmlessly.
-local function scoopLava(dir)
-  if not cfg.LAVA_REFUEL then return end
-  if fuelLevel() == math.huge or fuelLevel() >= cfg.REFUEL_TARGET then return end
-  local inspectFn = (dir == "up" and turtle.inspectUp)
-                 or (dir == "down" and turtle.inspectDown) or turtle.inspect
-  local ok, d = inspectFn()
-  if not (ok and pathOf(d.name):find("lava")) then return end
+-- forward-declared: the water chase below needs to call these to move
+-- toward a source, but their bodies (defined further down) fall back to
+-- the dig-safe helpers, which are what call into fluid handling in the
+-- first place - the local is declared here so both sides can see it.
+local tryUp, tryDown
+
+-- Fluids never register on turtle.detect(), so the dig helpers call
+-- handleFluid to look for lava/water by inspection. A lava source scooped
+-- with a carried empty bucket is 1,000 fuel; scooping flowing (non-source)
+-- lava fails harmlessly. Water sources are plugged (scooped or dammed)
+-- instead of refuelling from.
+local function scoopLavaBlock(dir, d)
+  if not pathOf(d.name):find("lava") then return end
   local slot = findSlot(function(n) return n == "minecraft:bucket" end)
   if not slot then return end
   turtle.select(slot)
@@ -479,6 +525,133 @@ local function scoopLava(dir)
     end
   end
   turtle.select(1)
+end
+
+local function inspectDir(dir)
+  local fn = (dir == "up" and turtle.inspectUp) or (dir == "down" and turtle.inspectDown) or turtle.inspect
+  return fn()
+end
+
+local function placeDir(dir)
+  local fn = (dir == "up" and turtle.placeUp) or (dir == "down" and turtle.placeDown) or turtle.place
+  return fn()
+end
+
+-- identifies a fluid cell for task.damSkip bookkeeping: the block one step
+-- in `dir` from the given position, in the turtle's relative coordinates
+local function fluidKey(px, py, pz, dir)
+  local ox, oy, oz = 0, 0, 0
+  if dir == "up" then oy = 1
+  elseif dir == "down" then oy = -1
+  else ox, oz = DX[heading], DZ[heading] end
+  return table.concat({ px + ox, py + oy, pz + oz }, ",")
+end
+
+-- called with a confirmed water source at dir; scoops it with a carried
+-- empty bucket when that's safe and preferBucket isn't false (see below),
+-- otherwise plugs it with a carried dam block. Returns true once the cell
+-- is confirmed no longer holding water.
+local function plugWaterSource(dir, preferBucket)
+  local bucketOK = preferBucket ~= false and cfg.WATER_SCOOP and (
+    not cfg.LAVA_REFUEL or fuelLevel() == math.huge or fuelLevel() >= cfg.REFUEL_TARGET
+    or countItems(function(n) return n == "minecraft:bucket" end) > 1)
+  if bucketOK then
+    local slot = findSlot(function(n) return n == "minecraft:bucket" end)
+    if slot then
+      turtle.select(slot)
+      local ok = placeDir(dir)
+      turtle.select(1)
+      if ok then return true end
+    end
+  end
+  local dslot = findSlot(isDamBlock)
+  if dslot then
+    turtle.select(dslot)
+    local ok = placeDir(dir)
+    turtle.select(1)
+    if ok then return true end
+  end
+  return false
+end
+
+-- reacts to water spotted at `dir` (from an inspect() result `d`): plugs a
+-- source directly, or chases flowing water a bounded distance toward its
+-- source, in the same direction it was detected (up stays up, down stays
+-- down - a "forward" detection never chases sideways, since that's the
+-- lateral-leak case left out of scope for v1). Never blocks or aborts the
+-- task; an unresolved flood is logged and remembered so it isn't retried
+-- from every cell it's visible from.
+local function handleWater(dir, d)
+  local key = fluidKey(pos.x, pos.y, pos.z, dir)
+  task.damSkip = task.damSkip or {}
+  if task.damSkip[key] then return end
+
+  local plugged, hops = false, 0
+  local name = d.name
+  while true do
+    if isWaterSource(name) then
+      plugged = plugWaterSource(dir)
+      break
+    end
+    if (dir ~= "up" and dir ~= "down") or hops >= cfg.DAM_SEARCH_RADIUS then break end
+    local moved = (dir == "up") and tryUp() or tryDown()
+    if not moved then break end
+    hops = hops + 1
+    checkControl()
+    local ok, nd = inspectDir(dir)
+    if not (ok and isWaterName(nd.name)) then break end -- nothing left to chase
+    name = nd.name
+  end
+  for _ = 1, hops do
+    if dir == "up" then tryDown() else tryUp() end
+  end
+
+  if not plugged then
+    note(("water near %d,%d,%d could not be plugged - leaving it running"):format(pos.x, pos.y, pos.z))
+    task.damSkip[key] = true
+    return
+  end
+
+  -- settle & recheck: a plug can turn out to have been an offshoot, not
+  -- the root, if fresh flow reappears once the surrounding water settles.
+  -- Reappearance right after a successful SCOOP is the signature of
+  -- Minecraft's "infinite water" mechanic (a source scooped out of a
+  -- larger pool gets instantly re-sourced by its still-adjacent
+  -- neighbours) - so retries force a placed block instead of scooping
+  -- again, since a solid block can't be washed away or re-flowed the way
+  -- a scooped cell can, and will resolve a pool of any size in one placement.
+  for _ = 2, cfg.DAM_MAX_ATTEMPTS do
+    sleep(1)
+    local ok, nd = inspectDir(dir)
+    if not (ok and isWaterName(nd.name)) then return end -- still resolved
+    plugWaterSource(dir, false)
+  end
+  local ok, nd = inspectDir(dir)
+  if ok and isWaterName(nd.name) then
+    note(("water near %d,%d,%d could not be plugged - leaving it running"):format(pos.x, pos.y, pos.z))
+    task.damSkip[key] = true
+  end
+end
+
+-- returns true when a fluid was found at `dir` and dealt with (scooped,
+-- dammed, chased, or given up on). The dig-safe helpers below must skip
+-- their own dig loop for this direction when true: a source dammed right
+-- at the direct target would otherwise be re-dug by that very same loop
+-- as an ordinary solid block, undoing the plug the instant it's placed.
+local function handleFluid(dir)
+  if not cfg.LAVA_REFUEL and not cfg.WATER_DAM then return false end
+  local ok, d = inspectDir(dir)
+  if not ok then return false end
+  if cfg.LAVA_REFUEL and pathOf(d.name):find("lava") then
+    if fuelLevel() ~= math.huge and fuelLevel() < cfg.REFUEL_TARGET then
+      scoopLavaBlock(dir, d)
+    end
+    return true
+  elseif cfg.WATER_DAM and isWaterName(d.name) then
+    handleWater(dir, d)
+    return true
+  end
+  return false
 end
 
 -- ================= movement primitives =================
@@ -534,7 +707,7 @@ end
 
 -- dig forward, tolerating gravel/sand columns
 local function digForwardSafe()
-  scoopLava("forward")
+  if handleFluid("forward") then return true end
   local tries = 0
   while turtle.detect() do
     checkControl()
@@ -556,7 +729,7 @@ local function digForwardSafe()
 end
 
 local function digUpSafe()
-  scoopLava("up")
+  if handleFluid("up") then return true end
   local tries = 0
   while turtle.detectUp() do
     checkControl()
@@ -578,7 +751,7 @@ local function digUpSafe()
 end
 
 local function digDownSafe()
-  scoopLava("down")
+  if handleFluid("down") then return true end
   if turtle.detectDown() then
     local ok, d = turtle.inspectDown()
     if ok and isTurtleBlock(d.name) then
@@ -612,7 +785,7 @@ local function tryForward()
   return true
 end
 
-local function tryUp()
+function tryUp()
   checkControl()
   ensureFuel()
   local tries = 0
@@ -632,7 +805,7 @@ local function tryUp()
   return true
 end
 
-local function tryDown()
+function tryDown()
   checkControl()
   ensureFuel()
   local tries = 0
@@ -1327,6 +1500,8 @@ local function recommendInventory()
   want(not fuelled, findSlot(isFuelItem) ~= nil, "fuel, e.g. coal")
   want(cfg.LAVA_REFUEL and fuelLevel() ~= math.huge,
        findSlot(isBucket) ~= nil, "an empty bucket (LAVA_REFUEL)")
+  want(cfg.WATER_DAM,
+       findSlot(isDamBlock) ~= nil, "a stack of cobblestone/dirt (WATER_DAM)")
   want(cfg.PLACE_TORCHES and not cfg.CRAFT_TORCHES,
        findSlot(isTorch) ~= nil, "torches (PLACE_TORCHES)")
   want(crafting and not turtle.craft,
