@@ -9,6 +9,8 @@
     wb2                          interactive setup wizard
     wb2 quarry <length> <width> [depth] [left|right] [up|down]
     wb2 strip <length> [snakes] [left|right]
+    wb2 floor <length> <width> <slot> [left|right] [up|down] [break]
+    wb2 wall <length> <height> <slot> [left|right] [up|down] [break]
     wb2 listen                   idle; wait for master commands
     wb2 resume                   resume task saved on disk
     wb2 set <KEY> <value>        change a config value
@@ -21,6 +23,16 @@
   layer 1 of the requested depth. Its starting block is home; put a
   chest directly BEHIND it for unloading, and (optionally, for
   crafty turtles) a second chest to its LEFT as a crafting buffer.
+
+  Floor & wall build instead of dig: they lay one block per cell of a
+  rectangle from a named inventory slot (the block in that slot at the
+  start is the material). A floor spans length x width at the turtle's
+  own level, placed below it (down) or above it (up); a wall spans
+  length x height in the vertical plane it starts on, placed to its
+  right or left and climbing up or down. When it runs out, it restocks
+  the same block from the home chest. With `break` it digs whatever is
+  in the way; without it, an obstruction is left alone and that cell
+  skipped (and it never breaks a block, even to reach home).
 ============================================================ ]]--
 
 if not turtle then
@@ -28,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.15" -- shown on the master's info screen; bump on release
+local VERSION = "1.16" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -147,6 +159,7 @@ local calib = nil       -- GPS calibration {offset, worldAt = {x,y,z}, relAt = {
 local haul = { total = 0, ores = {} } -- blocks dug this task, ores by name
 local control = { request = nil }  -- interrupt requests set by comms: stop/return/abort
 local recovering = false           -- true while handling a fuel/return interrupt
+local noBreak = false              -- floor/wall no-break tasks: movement never digs
 local hasModem = false
 local statusText, statusDetail = "idle", ""
 local lastNote = ""
@@ -213,7 +226,10 @@ local function buildStatus()
     t = { kind = task.kind, paused = task.paused or false,
           l = task.l, w = task.w, depth = task.depth, len = task.len,
           snakes = task.snakes, total = task.total,
-          layer = task.layer, cell = task.cell }
+          layer = task.layer, cell = task.cell,
+          -- floor/wall build tasks
+          dir = task.dir, vert = task.vert, block = task.block,
+          breakBlocks = task.breakBlocks, skipped = task.skipped }
   end
   return {
     id = os.getComputerID(),
@@ -771,6 +787,7 @@ local function tryForward()
   while not turtle.forward() do
     checkControl()
     if turtle.detect() then
+      if noBreak then return false end -- build tasks that must not break blocks
       if not digForwardSafe() then return false end
     else
       turtle.attack() -- a mob is in the way
@@ -792,6 +809,7 @@ function tryUp()
   while not turtle.up() do
     checkControl()
     if turtle.detectUp() then
+      if noBreak then return false end
       if not digUpSafe() then return false end
     else
       turtle.attackUp()
@@ -812,6 +830,7 @@ function tryDown()
   while not turtle.down() do
     checkControl()
     if turtle.detectDown() then
+      if noBreak then return false end
       local okI, d = turtle.inspectDown()
       if okI and isTurtleBlock(d.name) then
         if not waitForTurtle(turtle.inspectDown) then return false end
@@ -843,6 +862,7 @@ local function tryBack()
     return true
   end
   -- something fell into the cell behind us; turn around and dig through
+  if noBreak then return false end
   local h = heading
   face((h + 2) % 4)
   local ok = tryForward()
@@ -1530,8 +1550,9 @@ end
 
 local function finishTask(msg)
   setStatus("finishing", msg or "")
-  goHomeAndUnload()
+  goHomeAndUnload() -- honours a no-break task's rule on the way home too
   task = nil
+  noBreak = false   -- task over: the next one digs normally again
   saveState()
   setStatus("done", msg or "")
   recommendInventory()
@@ -1695,6 +1716,158 @@ local function runStrip()
   finishTask("strip complete")
 end
 
+-- ================= floor / wall building =================
+
+-- pull the building material (and ONLY it) out of the home chest. Any
+-- non-material, non-keep loot aboard is dropped into the chest first to
+-- free space; anything sucked up by mistake is returned. Assumes the
+-- turtle is at home facing the loot chest (heading 2).
+local function refillFromHomeChest(name)
+  local matcher = function(n) return n == name end
+  local ok, d = turtle.inspect()
+  if not (ok and isContainer(d.name)) then return false end
+  for slot = 1, 16 do
+    local dd = turtle.getItemDetail(slot)
+    if dd and not matcher(dd.name) and not isKeepItem(dd.name) then
+      turtle.select(slot)
+      turtle.drop()
+    end
+  end
+  while freeSlots() > 0 and turtle.suck() do end
+  for slot = 1, 16 do
+    local dd = turtle.getItemDetail(slot)
+    if dd and not matcher(dd.name) and not isKeepItem(dd.name) then
+      turtle.select(slot)
+      turtle.drop()
+    end
+  end
+  turtle.select(1)
+  return countItems(matcher) > 0
+end
+
+-- go home and restock the building material from the home chest, then
+-- leave the turtle at home (the main loop re-navigates to the cell, so
+-- the same no-break rule governs the trip back as governs the build).
+-- Returns false only if the turtle could not reach home at all - a
+-- no-break build boxed in on the way home has nowhere to restock.
+local function restockMaterial(name)
+  setStatus("returning", "restocking " .. tostring(name))
+  if not goTo({ x = 0, y = 0, z = 0 }) then
+    setStatus("blocked", "could not reach home to restock")
+    return false
+  end
+  face(2) -- loot chest behind home doubles as the material supply
+  local got = refillFromHomeChest(name)
+  while not got do
+    setStatus("waiting", ("no %s in the home chest - restock me"):format(tostring(name)))
+    sleep(3)
+    checkControl()
+    got = refillFromHomeChest(name)
+  end
+  face(0)
+  return true
+end
+
+-- drop mined junk, but never the building material (which is often an
+-- ordinary junk-listed block, e.g. cobblestone)
+local function dropJunkExcept(keepName)
+  if not cfg.DROP_JUNK then return end
+  for slot = 1, 16 do
+    local d = turtle.getItemDetail(slot)
+    if d and d.name ~= keepName and isJunk(d.name) then
+      turtle.select(slot)
+      if not turtle.dropDown(d.count) then
+        if not turtle.dropUp(d.count) then turtle.drop(d.count) end
+      end
+    end
+  end
+  turtle.select(1)
+end
+
+-- place one block of `name` at the current cell's target face. Returns
+-- "placed" (done, or the cell already holds our block), "blocked"
+-- (occupied and either unbreakable or breaking not allowed - skip it) or
+-- "empty" (out of material - restock and retry). A wall faces its chosen
+-- side first; a floor places straight up or down.
+local function placeCell(name)
+  local inspectFn, placeFn, digFn
+  if task.kind == "wall" then
+    face((task.dir == "left") and 3 or 1)
+    inspectFn, placeFn, digFn = turtle.inspect, turtle.place, digForwardSafe
+  elseif task.vert == "up" then
+    inspectFn, placeFn, digFn = turtle.inspectUp, turtle.placeUp, digUpSafe
+  else
+    inspectFn, placeFn, digFn = turtle.inspectDown, turtle.placeDown, digDownSafe
+  end
+  local occ, d = inspectFn()
+  if occ then
+    if d and d.name == name then return "placed" end -- already laid (e.g. resume)
+    if not task.breakBlocks then return "blocked" end
+    if d and (isSpawner(d.name) or isTurtleBlock(d.name)) then return "blocked" end
+    if not digFn() then return "blocked" end          -- bedrock/protected
+  end
+  local slot = findSlot(function(n) return n == name end)
+  if not slot then return "empty" end
+  turtle.select(slot)
+  local placed = placeFn()
+  turtle.select(1)
+  return placed and "placed" or "blocked"
+end
+
+-- floor and wall are the same job on different axes: serpentine across a
+-- rectangle, laying one block per cell. Floor cells span length x width
+-- at the turtle's own level (block placed below/above it); wall cells
+-- span length x height in the vertical plane it starts on (block placed
+-- to its right/left, climbing up or down). Unreachable cells (no-break
+-- navigation) and unfillable ones (occupied, breaking off) are skipped
+-- and counted.
+local function runPlace()
+  local l = task.l
+  local dim2 = task.w                    -- width for a floor, height for a wall
+  local cells = l * dim2
+  local name = task.block
+  local matcher = function(n) return n == name end
+  local wallSign = (task.vert == "down") and -1 or 1 -- wall climbs up by default
+  noBreak = not task.breakBlocks         -- stays set for the whole build
+  task.skipped = task.skipped or 0
+  while task.cell < cells do
+    checkControl()
+    local i = task.cell
+    local a, b = cellCoord(i, l, dim2)
+    local cx, cy, cz
+    if task.kind == "wall" then
+      cx, cy, cz = a, wallSign * b, 0
+    else
+      cx, cy, cz = a, 0, (task.dir == "left") and -b or b
+    end
+    setStatus(task.kind, ("cell %d/%d"):format(i + 1, cells))
+
+    if countItems(matcher) == 0 or freeSlots() < 1 then
+      if not restockMaterial(name) then task.paused = true saveState() return end
+    end
+
+    if goTo({ x = cx, y = cy, z = cz }) or goTo({ x = cx, y = cy, z = cz }, true) then
+      local res = placeCell(name)
+      if res == "empty" then
+        if not restockMaterial(name) then task.paused = true saveState() return end
+        -- leave task.cell unchanged: retry this cell now we have material
+      else
+        if res == "blocked" then task.skipped = task.skipped + 1 end
+        dropJunkExcept(name)
+        task.cell = i + 1
+        saveState()
+      end
+    else
+      task.skipped = task.skipped + 1 -- couldn't reach without breaking: skip
+      task.cell = i + 1
+      saveState()
+    end
+  end
+  local msg = task.kind .. " complete"
+  if task.skipped > 0 then msg = msg .. (" (%d skipped)"):format(task.skipped) end
+  finishTask(msg)
+end
+
 local function runGoto()
   setStatus("goto", ("%d, %d, %d"):format(task.x, task.y, task.z))
   if task.world then
@@ -1766,8 +1939,10 @@ local function runMuster()
 end
 
 local function runTask()
+  noBreak = false -- default; runPlace re-sets it for a no-break build
   if task.kind == "quarry" then runQuarry()
   elseif task.kind == "strip" then runStrip()
+  elseif task.kind == "floor" or task.kind == "wall" then runPlace()
   elseif task.kind == "goto" then runGoto()
   elseif task.kind == "muster" then runMuster()
   else
@@ -1804,6 +1979,7 @@ local function handleInterrupt(kind)
       setStatus("paused", "parked at home")
     elseif kind == "abort" then
       task = nil
+      noBreak = false
       saveState()
       setStatus("idle", "task aborted")
     elseif kind == "fuel" then
@@ -1854,12 +2030,18 @@ local function coerce(v)
 end
 
 local function startTask(t)
+  noBreak = false
   calib = nil -- never carry an old anchor into a task: it steers every
               -- boot-time GPS position fix for the whole run, and a stale
               -- one (turtle hand-moved since it was learned) teleports the
               -- turtle's belief. Re-learn fresh, or mine on dead reckoning.
   rebase()
-  pcall(calibrate) -- calibration moves the turtle; never let a fuel interrupt escape here
+  -- floor/wall are purely local dead-reckoning builds and never take a
+  -- world goto, so they skip the calibration wiggle (which digs a block
+  -- forward - unwanted at the start of a no-break build)
+  if t.kind ~= "floor" and t.kind ~= "wall" then
+    pcall(calibrate) -- calibration moves the turtle; never let a fuel interrupt escape here
+  end
   haul = { total = 0, ores = {} }
   t.paused = false
   task = t
@@ -1899,6 +2081,19 @@ local function handleCmd(sender, msg)
                   total = stripTotal(msg.len, snakes), cell = 0 })
       reply(("starting strip %d%s"):format(msg.len,
         snakes > 0 and (" x" .. (snakes + 1) .. " snaked rows") or ""))
+    elseif (msg.mode == "floor" or msg.mode == "wall") and msg.l and msg.w and msg.slot then
+      -- the material is whatever is in the named slot right now
+      local d = turtle.getItemDetail(msg.slot)
+      local block = d and d.name
+      if not block then
+        reply(("nothing to place in slot %s - load it first"):format(tostring(msg.slot)))
+        return
+      end
+      startTask({ kind = msg.mode, l = msg.l, w = msg.w, dir = msg.dir,
+                  vert = msg.vert, slot = msg.slot, block = block,
+                  breakBlocks = msg.breakBlocks and true or false,
+                  total = msg.l * msg.w, cell = 0 })
+      reply(("starting %s %dx%d of %s"):format(msg.mode, msg.l, msg.w, block))
     else
       reply("bad start parameters")
     end
@@ -2050,8 +2245,34 @@ end
 local function wizard()
   print("World Breaker 2 - setup")
   print("(enter accepts the [default])")
-  local mode = ask("Mode - [q]uarry / strip (q/s) [q]: ", "q")
-  if mode:lower():sub(1, 1) == "s" then
+  local mode = ask("Mode - [q]uarry / strip / floor / wall (q/s/f/w) [q]: ", "q")
+  local m1 = mode:lower():sub(1, 1)
+  if m1 == "f" or m1 == "w" then
+    local isWall = (m1 == "w")
+    local len = tonumber(ask("Length (forward) [8]: ", "8")) or 8
+    local d2 = tonumber(ask(isWall and "Height [4]: " or "Width (sideways) [8]: ",
+                            isWall and "4" or "8")) or (isWall and 4 or 8)
+    local slot = tonumber(ask("Which inventory slot holds the block? [1]: ", "1")) or 1
+    local block = turtle.getItemDetail(slot) and turtle.getItemDetail(slot).name
+    if not block then
+      print(("Nothing in slot %d - put your building block there and rerun."):format(slot))
+      return nil
+    end
+    local dir = ask((isWall and "Wall to my right or left? (r/l) [r]: "
+                            or "Width to my right or left? (r/l) [r]: "), "r")
+                  :lower():sub(1, 1) == "l" and "left" or "right"
+    local vert
+    if isWall then
+      vert = ask("Climb up or down? (u/d) [u]: ", "u"):lower():sub(1, 1) == "d" and "down" or "up"
+    else
+      vert = ask("Floor below or above me? (b/a) [b]: ", "b"):lower():sub(1, 1) == "a" and "up" or "down"
+    end
+    local brk = ask("May I break blocks in the way? (y/n) [n]: ", "n"):lower():sub(1, 1) == "y"
+    print(("(%s of %s from slot %d)"):format(isWall and "wall" or "floor", block, slot))
+    return { kind = isWall and "wall" or "floor", l = len, w = d2, dir = dir,
+             vert = vert, slot = slot, block = block, breakBlocks = brk,
+             total = len * d2, cell = 0 }
+  elseif m1 == "s" then
     local len = tonumber(ask("Tunnel length [64]: ", "64")) or 64
     cfg.PLACE_TORCHES = ask("Place torches? (y/n) [y]: ", "y"):lower():sub(1, 1) == "y"
     cfg.STRIP_VEIN = ask("Chase ore veins? (y/n) [y]: ", "y"):lower():sub(1, 1) == "y"
@@ -2156,6 +2377,35 @@ elseif verb == "strip" then
   end
   startTask({ kind = "strip", len = len, snakes = snakes, dir = dir,
               total = stripTotal(len, snakes), cell = 0 })
+elseif verb == "floor" or verb == "wall" then
+  local nums, dir, vert, brk = {}, nil, nil, false
+  for i = 2, #args do
+    local a = args[i]:lower()
+    if tonumber(a) then table.insert(nums, tonumber(a))
+    elseif a == "left" or a == "right" then dir = a
+    elseif a == "up" or a == "down" then vert = a
+    elseif a == "break" then brk = true
+    elseif a == "nobreak" then brk = false end
+  end
+  local l, d2, slot = nums[1], nums[2], nums[3]
+  if not (l and d2 and slot) then
+    if verb == "floor" then
+      print("Usage: wb2 floor <length> <width> <slot> [left|right] [up|down] [break]")
+    else
+      print("Usage: wb2 wall <length> <height> <slot> [left|right] [up|down] [break]")
+    end
+    print("(slot = the inventory slot holding the block to place)")
+    return
+  end
+  local d = turtle.getItemDetail(slot)
+  local block = d and d.name
+  if not block then
+    print(("Nothing to place in slot %d - put your building block there first."):format(slot))
+    return
+  end
+  startTask({ kind = verb, l = l, w = d2, dir = dir, vert = vert,
+              slot = slot, block = block, breakBlocks = brk,
+              total = l * d2, cell = 0 })
 elseif verb == "resume" then
   if not loadState() or not task then
     print("Nothing to resume.")
@@ -2206,7 +2456,9 @@ elseif verb == "listen" then
   setStatus("idle", "awaiting master commands")
   pcall(calibrate, true) -- orient (never digging) if GPS is up
 elseif verb == "" then
-  startTask(wizard())
+  local t = wizard()
+  if not t then return end
+  startTask(t)
 else
   print("Usage: wb2 [quarry|strip|listen|resume|set|config|reset]")
   return

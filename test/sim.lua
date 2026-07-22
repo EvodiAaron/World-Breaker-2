@@ -1494,6 +1494,126 @@ end
 check(chestCobble == 4, "only the last DAM_RESERVE(4) units survived dropJunk to be hauled home; the rest was junked mid-run")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 44: floor laid below the turtle (right, down) ----------
+print("scenario: floor 3x2 laid below, to the right (default)")
+resetWorld()
+addChest(-1, 0, 0) -- home chest behind (a working container for leftovers)
+inv[1] = { name = "minecraft:stone_bricks", count = 20 }
+runWB2("floor", "3", "2", "1")
+local floorOk = true
+for x = 0, 2 do
+  for z = 0, 1 do
+    if world[key(x, -1, z)] ~= "minecraft:stone_bricks" then floorOk = false end
+  end
+end
+check(floorOk, "all 6 floor cells filled below the turtle (y=-1)")
+check(world[key(3, -1, 0)] == nil, "nothing placed beyond the length")
+check(world[key(0, -1, -1)] == nil, "nothing placed on the left (built to the right)")
+local sbChest = 0
+for _, s in ipairs(containers[key(-1, 0, 0)] or {}) do
+  if s.name == "minecraft:stone_bricks" then sbChest = sbChest + s.count end
+end
+check(sbChest == 14, "the 14 leftover blocks were returned to the home chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 45: floor laid above the turtle (left, up) ----------
+print("scenario: floor 2x2 laid above, to the left")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+runWB2("floor", "2", "2", "1", "left", "up")
+local ceilOk = true
+for x = 0, 1 do
+  for z = 0, -1, -1 do
+    if world[key(x, 1, z)] ~= "minecraft:stone_bricks" then ceilOk = false end
+  end
+end
+check(ceilOk, "all 4 cells filled above the turtle (y=1), on the left (z 0..-1)")
+check(world[key(0, 1, 1)] == nil, "nothing placed on the right side")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 46: wall built to the right, climbing up ----------
+print("scenario: wall 3x2 to the right, climbing up")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+runWB2("wall", "3", "2", "1")
+local wallOk = true
+for x = 0, 2 do
+  for y = 0, 1 do
+    if world[key(x, y, 1)] ~= "minecraft:stone_bricks" then wallOk = false end
+  end
+end
+check(wallOk, "all 6 wall cells filled to the right (z=1), across x 0..2 and y 0..1")
+check(world[key(0, 0, -1)] == nil, "nothing placed on the left side")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 47: wall built to the left, descending ----------
+print("scenario: wall 2x2 to the left, descending")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+runWB2("wall", "2", "2", "1", "left", "down")
+local wallDn = true
+for x = 0, 1 do
+  for y = 0, -1, -1 do
+    if world[key(x, y, -1)] ~= "minecraft:stone_bricks" then wallDn = false end
+  end
+end
+check(wallDn, "all 4 wall cells filled to the left (z=-1), descending y 0..-1")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 48: no-break floor skips an obstructed target ----------
+print("scenario: floor without 'break' skips a target cell that is occupied")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+world[key(1, -1, 0)] = "minecraft:stone" -- the middle target is already solid
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+logClear()
+runWB2("floor", "3", "1", "1")
+check(world[key(0, -1, 0)] == "minecraft:stone_bricks", "first cell filled")
+check(world[key(1, -1, 0)] == "minecraft:stone", "obstructed cell left untouched, not broken")
+check(world[key(2, -1, 0)] == "minecraft:stone_bricks", "the turtle continued past the obstruction")
+check(logHas("1 skipped"), "the skipped cell was reported")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 49: floor with 'break' clears an obstruction and fills it ----------
+print("scenario: floor with 'break' digs out the obstruction, then places its block")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+world[key(1, -1, 0)] = "minecraft:stone"
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+runWB2("floor", "3", "1", "1", "break")
+check(world[key(1, -1, 0)] == "minecraft:stone_bricks", "obstruction broken and replaced with the floor block")
+check(countInvItem("minecraft:cobblestone") == 0, "the dug cobblestone was junked, not kept")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 50: runs out of material, restocks from the home chest ----------
+print("scenario: floor restocks its block from the home chest when it runs out")
+resetWorld()
+addChest(-1, 0, 0)
+table.insert(containers[key(-1, 0, 0)], { name = "minecraft:stone_bricks", count = 10 })
+inv[1] = { name = "minecraft:stone_bricks", count = 1 } -- only enough for the first cell
+logClear()
+runWB2("floor", "3", "1", "1")
+local restocked = true
+for x = 0, 2 do
+  if world[key(x, -1, 0)] ~= "minecraft:stone_bricks" then restocked = false end
+end
+check(restocked, "all 3 cells filled after fetching more material from home")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 51: wall with 'break' digs a side obstruction ----------
+print("scenario: wall with 'break' clears a block already in the wall line")
+resetWorld()
+world[key(-1, 0, 0)] = "minecraft:chest"
+world[key(0, 0, 1)] = "minecraft:stone" -- first wall cell is already solid
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+runWB2("wall", "2", "1", "1", "right", "up", "break")
+check(world[key(0, 0, 1)] == "minecraft:stone_bricks", "side obstruction broken and replaced")
+check(world[key(1, 0, 1)] == "minecraft:stone_bricks", "the rest of the wall was built")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

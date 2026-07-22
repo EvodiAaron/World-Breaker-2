@@ -86,9 +86,26 @@ wb2 strip 64           -- 64-block 1x2 tunnel, chasing every ore vein it passes
 wb2 strip 64 4         -- same, then snakes back and forth 4 more times,
                        --   parallel rows with a 2-block gap between them
 wb2 strip 64 4 left    -- snaked rows extend to the LEFT instead
+wb2 floor 10 10 1      -- lay a 10x10 floor BELOW, using the block in slot 1
+wb2 floor 10 10 1 up   -- lay it on the ceiling ABOVE instead
+wb2 wall 20 4 2        -- build a 20-long, 4-high wall to the RIGHT from slot 2
+wb2 wall 20 4 2 left down  -- wall on the LEFT, descending instead of climbing
+wb2 floor 10 10 1 break    -- allow it to dig out anything already in the way
 wb2 resume             -- continue a saved task (startup does this for you)
 wb2 listen             -- idle, await master commands (needs a modem)
 ```
+
+**Floor & wall build instead of dig.** You name the inventory slot holding
+the block to place; whatever is in that slot when it starts is the material
+it uses for the whole job. A **floor** covers `length` x `width` at the
+turtle's own level, placed **below** it (default) or **above** it (`up`); a
+**wall** covers `length` x `height` in the vertical plane it starts on,
+placed to its **right** (default) or **left**, **climbing up** (default) or
+**descending** (`down`). It serpentines the rectangle for minimal travel and,
+when the slot runs dry, fetches more of the same block from the home chest.
+By default it treats any block already in the way as untouchable — it leaves
+it and skips that cell (and won't break a block even to get home); pass
+`break` to let it clear obstructions and fill them in.
 
 The turtle sits **inside the corner block** of the quarry: place it at a
 corner of the area you want gone, and its own layer counts as layer 1 of
@@ -238,11 +255,13 @@ no enrolment, no pairing. Every button shows its hotkey as the
 capitalised, highlighted letter in its label (`x:Stop` when the label
 doesn't contain the key). Select with up/down, then:
 
-- `m` **modes menu** — Quarry / Strip / Multi-quarry / Goto on one screen
-  (the direct hotkeys below still work from the dashboard)
+- `m` **modes menu** — Quarry / Strip / Multi-quarry / Floor / Wall / Goto
+  on one screen (the direct hotkeys below still work from the dashboard)
 - `q`/`s` start a quarry/strip **where the turtle currently stands** (its
   position becomes the new home). Both accept the same trailing options as
   the turtle CLI: `32 32 20 left up` for quarries, `64 4 left` for strips.
+- `f`/`w` start a **floor**/**wall** build from a named inventory slot, same
+  trailing options as the turtle CLI (`10 10 1 up`, `20 4 2 left down break`)
 - `g` send it to coordinates (world coords with GPS, or `r x y z` relative)
 - `x` stop in place, `e` resume, `r` return home & unload, `a` abort task
 - `c` **config menu**: every optional feature of the selected turtle on one
@@ -380,7 +399,7 @@ Calibration digs/steps one block forward and back at task start.
 ## Files
 
 ```
-turtle/wb2.lua        the whole turtle brain (quarry, strip, comms, crafting)
+turtle/wb2.lua        the whole turtle brain (quarry, strip, floor, wall, comms, crafting)
 turtle/startup.lua    auto-resume after reboot
 master/wb2master.lua  fleet dashboard
 master/startup.lua    auto-launch console
@@ -391,8 +410,9 @@ test/sim.lua          headless mock-turtle test suite (run: lua test/sim.lua)
 ## Development
 
 `test/sim.lua` mocks the ComputerCraft turtle/fs/rednet/GPS/peripheral APIs
-and runs real quarry and strip jobs against an in-memory world — bounds,
-bedrock intrusions, vein chasing, scanner ore-homing, torch placement,
-unload trips, mid-run config changes over rednet, mustering (both GPS and
-line mode), and reboot-resume are all asserted. Run it with any desktop
-Lua 5.3+ after changing `wb2.lua`.
+and runs real quarry, strip, floor and wall jobs against an in-memory
+world — bounds, bedrock intrusions, vein chasing, scanner ore-homing,
+torch placement, unload trips, mid-run config changes over rednet,
+mustering (both GPS and line mode), floor/wall placement (both axes,
+no-break skipping, break-and-fill, home-chest restock) and reboot-resume
+are all asserted. Run it with any desktop Lua 5.3+ after changing `wb2.lua`.

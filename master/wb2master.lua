@@ -7,8 +7,9 @@
 
   Keys (the highlighted letter on each button is its hotkey):
     up/down     select a turtle
-    m  modes menu: quarry / strip / multi-quarry / goto
+    m  modes menu: quarry / strip / multi-quarry / floor / wall / goto
     q  start a quarry        s  start a strip mine
+    f  lay a floor           w  build a wall
     g  go to coordinates     r  return home & unload
     e  resume paused task    x  stop (pause) in place
     a  abort task            t  toggle torch placement
@@ -249,6 +250,8 @@ local function taskPct(t)
     return math.min(1, ((t.layer or 0) * cells + (t.cell or 0)) / (cells * layers))
   elseif t.kind == "strip" and (t.total or t.len) then
     return math.min(1, (t.cell or 0) / (t.total or t.len))
+  elseif (t.kind == "floor" or t.kind == "wall") and (t.total or (t.l and t.w)) then
+    return math.min(1, (t.cell or 0) / (t.total or (t.l * t.w)))
   end
   return nil
 end
@@ -630,6 +633,18 @@ local function infoScreen()
         t.paused and " [paused]" or ""))
       setColor(colors.lime)
       print(bar(taskPct(t) or 0, 30))
+    elseif t.kind == "floor" or t.kind == "wall" then
+      print(("%s %dx%d%s%s - cell %d/%d%s"):format(t.kind, t.l or 0, t.w or 0,
+        t.block and (" of " .. t.block) or "",
+        t.breakBlocks and " [break]" or "",
+        t.cell or 0, t.total or ((t.l or 0) * (t.w or 0)),
+        t.paused and " [paused]" or ""))
+      setColor(colors.lime)
+      print(bar(taskPct(t) or 0, 30))
+      if t.skipped and t.skipped > 0 then
+        setColor(colors.orange)
+        print(("%d cell(s) skipped (obstructed)"):format(t.skipped))
+      end
     elseif t.kind == "goto" then
       print("travelling")
     end
@@ -931,6 +946,48 @@ local function startStripPrompt()
   end
 end
 
+-- floor/wall are build modes: lay a block from a named slot across a
+-- rectangle. The turtle reads the material from that slot when it starts.
+local function startFloorPrompt()
+  local id = selectedId()
+  local input = prompt("floor <length> <width> <slot> [left|right] [up|down] [break]: ")
+  local nums, dir, vert, brk = {}, nil, nil, false
+  for word in input:gmatch("%S+") do
+    local num = tonumber(word)
+    if num then table.insert(nums, num)
+    elseif word == "left" or word == "right" then dir = word
+    elseif word == "up" or word == "down" then vert = word
+    elseif word == "break" then brk = true end
+  end
+  if nums[1] and nums[2] and nums[3] then
+    send({ cmd = "start", mode = "floor", l = nums[1], w = nums[2],
+           slot = nums[3], dir = dir, vert = vert, breakBlocks = brk })
+    pushNote(("#%d: floor %dx%d requested"):format(id or -1, nums[1], nums[2]))
+  else
+    pushNote("Format: <length> <width> <slot> [left|right] [up|down] [break]")
+  end
+end
+
+local function startWallPrompt()
+  local id = selectedId()
+  local input = prompt("wall <length> <height> <slot> [left|right] [up|down] [break]: ")
+  local nums, dir, vert, brk = {}, nil, nil, false
+  for word in input:gmatch("%S+") do
+    local num = tonumber(word)
+    if num then table.insert(nums, num)
+    elseif word == "left" or word == "right" then dir = word
+    elseif word == "up" or word == "down" then vert = word
+    elseif word == "break" then brk = true end
+  end
+  if nums[1] and nums[2] and nums[3] then
+    send({ cmd = "start", mode = "wall", l = nums[1], w = nums[2],
+           slot = nums[3], dir = dir, vert = vert, breakBlocks = brk })
+    pushNote(("#%d: wall %dx%d requested"):format(id or -1, nums[1], nums[2]))
+  else
+    pushNote("Format: <length> <height> <slot> [left|right] [up|down] [break]")
+  end
+end
+
 local function gotoPrompt()
   local id = selectedId()
   local input = prompt("goto x y z (world coords; prefix 'r' for relative): ")
@@ -949,6 +1006,8 @@ local MODES = {
   { ch = "q", name = "Quarry",       desc = "dig out an area (selected turtle)" },
   { ch = "s", name = "Strip",        desc = "strip tunnel, optionally snaking" },
   { ch = "m", name = "Multi-quarry", desc = "one quarry tiled across turtles" },
+  { ch = "f", name = "Floor",        desc = "lay a floor from a chosen slot" },
+  { ch = "w", name = "Wall",         desc = "build a wall from a chosen slot" },
   { ch = "g", name = "Goto",         desc = "send the selection to coordinates" },
 }
 
@@ -959,6 +1018,8 @@ local function modesMenu()
     if m.ch == "q" then startQuarryPrompt()
     elseif m.ch == "s" then startStripPrompt()
     elseif m.ch == "m" then multiQuarry()
+    elseif m.ch == "f" then startFloorPrompt()
+    elseif m.ch == "w" then startWallPrompt()
     elseif m.ch == "g" then gotoPrompt() end
   end
   while true do
@@ -1149,6 +1210,10 @@ local function handleChar(ch)
     startQuarryPrompt()
   elseif ch == "s" then
     startStripPrompt()
+  elseif ch == "f" then
+    startFloorPrompt()
+  elseif ch == "w" then
+    startWallPrompt()
   elseif ch == "g" then
     gotoPrompt()
   elseif ch == "r" then
