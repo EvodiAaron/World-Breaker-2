@@ -1026,6 +1026,11 @@ local MENU_KEYS = {
   { key = "LAVA_REFUEL",    kind = "bool", desc = "scoop lava with a bucket" },
   { key = "FUEL_RESERVE",   kind = "num",  desc = "safety fuel margin" },
   { key = "REFUEL_TARGET",  kind = "num",  desc = "refuel up to this level" },
+  { key = "WATER_DAM",      kind = "bool", desc = "auto-seal water sources" },
+  { key = "WATER_SCOOP",    kind = "bool", desc = "prefer scoop over dam block" },
+  { key = "DAM_RESERVE",    kind = "num",  desc = "dam material units held back" },
+  { key = "DAM_SEARCH_RADIUS", kind = "num", desc = "max hops chasing a source" },
+  { key = "DAM_MAX_ATTEMPTS",  kind = "num", desc = "settle-recheck retries" },
 }
 
 local function menuApply(entry, cur, fleet, id)
