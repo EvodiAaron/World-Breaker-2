@@ -1614,6 +1614,43 @@ check(world[key(0, 0, 1)] == "minecraft:stone_bricks", "side obstruction broken 
 check(world[key(1, 0, 1)] == "minecraft:stone_bricks", "the rest of the wall was built")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 52: muster waits out a slow fellow turtle ----------
+-- the field bug: the fleet is released to muster all at once and has to
+-- cascade out of each other's paths; a follower blocked by the turtle
+-- ahead used to give up after ~15s and report "blocked", so it never
+-- reported ready and the whole muster stalled. It must now wait minutes.
+-- Here the blocker only clears LONG after the old 15-tick window, so the
+-- old code would give up (state "blocked") and this would fail.
+print("scenario: muster (line mode) waits out a slow fellow turtle instead of giving up")
+resetWorld()
+modemSide = "left"
+world[key(0, 0, 1)] = "computercraft:turtle_normal" -- one step into the sidestep path
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5,
+  msg = { cmd = "muster", right = 3 } })
+table.insert(rednetQueue, { proto = "wb2cmd", sender = 5, when = sentKind("queued"),
+  msg = { cmd = "resume" } })
+-- the blocker only moves off well after the old 15-second patience elapsed
+local waitTicks52 = 0
+table.insert(simEvents, {
+  when = function()
+    if logHas("another turtle is in my way") then waitTicks52 = waitTicks52 + 1 end
+    return waitTicks52 > 25
+  end,
+  fn = function() world[key(0, 0, 1)] = nil end,
+})
+-- end the sim on ready OR blocked, so an old-code give-up fails cleanly
+-- (instead of hanging the run) rather than never terminating
+shutdownWhen = function(msg) return msg.state == "ready" or msg.state == "blocked" end
+runWB2("listen")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 3,
+  "follower waited for the slow turtle, then reached its tile 3 to the right")
+check(thead == 0, "back on its original facing")
+local readySent52 = false
+for _, s in ipairs(rednetSent) do
+  if type(s.msg) == "table" and s.msg.kind == "ready" then readySent52 = true end
+end
+check(readySent52, "ready reported after waiting - the muster was not abandoned")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.16" -- shown on the master's info screen; bump on release
+local VERSION = "1.17" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -160,6 +160,10 @@ local haul = { total = 0, ores = {} } -- blocks dug this task, ores by name
 local control = { request = nil }  -- interrupt requests set by comms: stop/return/abort
 local recovering = false           -- true while handling a fuel/return interrupt
 local noBreak = false              -- floor/wall no-break tasks: movement never digs
+local turtleWaitLimit = 15         -- seconds to wait for a fellow turtle before
+                                   -- routing around; musters raise it (see runMuster)
+                                   -- because a whole fleet released at once has to
+                                   -- cascade out of each other's paths
 local hasModem = false
 local statusText, statusDetail = "idle", ""
 local lastNote = ""
@@ -709,7 +713,7 @@ end
 -- give a fellow turtle time to move out of the way; true once the spot
 -- is clear, false if it stayed put (treat like bedrock: route around)
 local function waitForTurtle(inspectFn)
-  for waited = 0, 15 do
+  for waited = 0, turtleWaitLimit do
     local ok, d = inspectFn()
     if not (ok and isTurtleBlock(d.name)) then return true end
     if waited == 0 then
@@ -1894,6 +1898,12 @@ end
 -- only begins when the master follows up with a start command
 local function runMuster()
   local master = task.master
+  -- the master releases the whole fleet at once, so followers have to
+  -- cascade out of each other's paths - a turtle deep in the row can be
+  -- blocked by the ones ahead of it for far longer than the normal
+  -- route-around patience. Wait minutes, not seconds, for a fellow turtle
+  -- here; the user can still abort (q on the master) if one is truly dead.
+  turtleWaitLimit = 300
   if task.right ~= nil then
     -- line mode: sidestep relative to our current facing (no GPS needed)
     local n = task.right
@@ -1939,7 +1949,8 @@ local function runMuster()
 end
 
 local function runTask()
-  noBreak = false -- default; runPlace re-sets it for a no-break build
+  noBreak = false           -- default; runPlace re-sets it for a no-break build
+  turtleWaitLimit = 15      -- default; runMuster raises it for the fleet cascade
   if task.kind == "quarry" then runQuarry()
   elseif task.kind == "strip" then runStrip()
   elseif task.kind == "floor" or task.kind == "wall" then runPlace()
