@@ -1651,6 +1651,43 @@ for _, s in ipairs(rednetSent) do
 end
 check(readySent52, "ready reported after waiting - the muster was not abandoned")
 
+-- ---------- scenario 53: a turtle FULL of material does not restock ----------
+-- the field bug: the restock trigger was "out of material OR no free slots",
+-- but a turtle loaded up with the building block has no free slots by
+-- definition - so it drove all the way home to "restock" on every cell.
+print("scenario: floor with a full load of the block never makes a restock trip")
+resetWorld()
+addChest(-1, 0, 0)
+for i = 1, 16 do inv[i] = { name = "minecraft:stone_bricks", count = 64 } end
+logClear()
+runWB2("floor", "4", "1", "1")
+local full53 = true
+for x = 0, 3 do
+  if world[key(x, -1, 0)] ~= "minecraft:stone_bricks" then full53 = false end
+end
+check(full53, "all 4 cells filled straight through")
+check(not logHas("restocking"), "no needless restock trip while full of the block")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 54: a build never smashes a chest, even with break on ----------
+-- the field bug: on those needless home trips the turtle would break the
+-- home chest. A build now refuses to dig any container (home chest, or one
+-- sitting in the build line) - it skips that cell instead.
+print("scenario: floor with 'break' skips a chest in its line instead of smashing it")
+resetWorld()
+addChest(-1, 0, 0)
+world[key(1, -1, 0)] = "minecraft:chest" -- a chest exactly where a floor block would go
+containers[key(1, -1, 0)] = {}
+inv[1] = { name = "minecraft:stone_bricks", count = 10 }
+logClear()
+runWB2("floor", "3", "1", "1", "break")
+check(world[key(1, -1, 0)] == "minecraft:chest", "the chest in the build line was left intact")
+check(world[key(0, -1, 0)] == "minecraft:stone_bricks", "cells before it were filled")
+check(world[key(2, -1, 0)] == "minecraft:stone_bricks", "cells past it were still filled")
+check(logHas("1 skipped"), "the chest's cell was skipped and reported")
+check(world[key(-1, 0, 0)] == "minecraft:chest", "the home chest is untouched")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then

@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.17" -- shown on the master's info screen; bump on release
+local VERSION = "1.18" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -160,6 +160,8 @@ local haul = { total = 0, ores = {} } -- blocks dug this task, ores by name
 local control = { request = nil }  -- interrupt requests set by comms: stop/return/abort
 local recovering = false           -- true while handling a fuel/return interrupt
 local noBreak = false              -- floor/wall no-break tasks: movement never digs
+local keepContainers = false       -- floor/wall builds never dig a chest/barrel
+                                   -- (esp. the home chest); routes around instead
 local turtleWaitLimit = 15         -- seconds to wait for a fellow turtle before
                                    -- routing around; musters raise it (see runMuster)
                                    -- because a whole fleet released at once has to
@@ -736,6 +738,8 @@ local function digForwardSafe()
       if not waitForTurtle(turtle.inspect) then return false end
     elseif ok and isSpawner(d.name) then
       return false -- never break a mob spawner
+    elseif ok and keepContainers and isContainer(d.name) then
+      return false -- floor/wall build: never smash a chest (e.g. home chest)
     else
       local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
       if not turtle.dig() then return false end -- bedrock / protected
@@ -758,6 +762,8 @@ local function digUpSafe()
       if not waitForTurtle(turtle.inspectUp) then return false end
     elseif ok and isSpawner(d.name) then
       return false -- never break a mob spawner
+    elseif ok and keepContainers and isContainer(d.name) then
+      return false -- floor/wall build: never smash a chest
     else
       local falling = ok and (pathOf(d.name):find("gravel") or pathOf(d.name):find("sand"))
       if not turtle.digUp() then return false end
@@ -778,6 +784,7 @@ local function digDownSafe()
       return waitForTurtle(turtle.inspectDown)
     end
     if ok and isSpawner(d.name) then return false end -- never break a mob spawner
+    if ok and keepContainers and isContainer(d.name) then return false end -- keep chests
     if not turtle.digDown() then return false end
     if ok then recordDig(d.name) end
   end
@@ -840,6 +847,8 @@ function tryDown()
         if not waitForTurtle(turtle.inspectDown) then return false end
       elseif okI and isSpawner(d.name) then
         return false -- never break a mob spawner
+      elseif okI and keepContainers and isContainer(d.name) then
+        return false -- floor/wall build: never smash a chest
       else
         if not turtle.digDown() then return false end
         if okI then recordDig(d.name) end
@@ -1557,6 +1566,7 @@ local function finishTask(msg)
   goHomeAndUnload() -- honours a no-break task's rule on the way home too
   task = nil
   noBreak = false   -- task over: the next one digs normally again
+  keepContainers = false
   saveState()
   setStatus("done", msg or "")
   recommendInventory()
@@ -1807,7 +1817,9 @@ local function placeCell(name)
   if occ then
     if d and d.name == name then return "placed" end -- already laid (e.g. resume)
     if not task.breakBlocks then return "blocked" end
-    if d and (isSpawner(d.name) or isTurtleBlock(d.name)) then return "blocked" end
+    if d and (isSpawner(d.name) or isTurtleBlock(d.name) or isContainer(d.name)) then
+      return "blocked" -- never break a spawner, a fellow turtle, or a chest
+    end
     if not digFn() then return "blocked" end          -- bedrock/protected
   end
   local slot = findSlot(function(n) return n == name end)
@@ -1833,6 +1845,7 @@ local function runPlace()
   local matcher = function(n) return n == name end
   local wallSign = (task.vert == "down") and -1 or 1 -- wall climbs up by default
   noBreak = not task.breakBlocks         -- stays set for the whole build
+  keepContainers = true                  -- never smash a chest, even with break on
   task.skipped = task.skipped or 0
   while task.cell < cells do
     checkControl()
@@ -1846,7 +1859,13 @@ local function runPlace()
     end
     setStatus(task.kind, ("cell %d/%d"):format(i + 1, cells))
 
-    if countItems(matcher) == 0 or freeSlots() < 1 then
+    -- restock only when actually OUT of the block. (An earlier version also
+    -- restocked whenever freeSlots()<1, but a turtle loaded up with the
+    -- building material has no free slots by definition, so it drove home
+    -- on every single cell.) Placing never needs a free slot; when breaking
+    -- is on, dug junk is shed by dropJunkExcept and the material slot is all
+    -- that placement requires.
+    if countItems(matcher) == 0 then
       if not restockMaterial(name) then task.paused = true saveState() return end
     end
 
@@ -1950,6 +1969,7 @@ end
 
 local function runTask()
   noBreak = false           -- default; runPlace re-sets it for a no-break build
+  keepContainers = false    -- default; runPlace re-sets it for builds
   turtleWaitLimit = 15      -- default; runMuster raises it for the fleet cascade
   if task.kind == "quarry" then runQuarry()
   elseif task.kind == "strip" then runStrip()
@@ -1991,6 +2011,7 @@ local function handleInterrupt(kind)
     elseif kind == "abort" then
       task = nil
       noBreak = false
+      keepContainers = false
       saveState()
       setStatus("idle", "task aborted")
     elseif kind == "fuel" then
@@ -2042,6 +2063,7 @@ end
 
 local function startTask(t)
   noBreak = false
+  keepContainers = false
   calib = nil -- never carry an old anchor into a task: it steers every
               -- boot-time GPS position fix for the whole run, and a stale
               -- one (turtle hand-moved since it was learned) teleports the
