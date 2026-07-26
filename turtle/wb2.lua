@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.19" -- shown on the master's info screen; bump on release
+local VERSION = "1.20" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -1320,17 +1320,20 @@ end
 -- Fuel is a keep-item but only ONE stack's worth stays aboard: dug-up coal
 -- would otherwise accumulate forever and never reach the chest. Buckets are
 -- exempt (a lava bucket is fuel, but losing the bucket breaks LAVA_REFUEL).
+-- Floor/wall builds never MINE fuel, so that one-stack cap would just dump
+-- the player's own fuel supply into the chest - keep all of it there.
 local function unloadInto(dropFn)
   local full = false
   local fuelKept = 0 -- in plain-coal equivalents; a coal block is nine coal,
                      -- so a stack of blocks can't slip past the one-stack cap
+  local keepAllFuel = task and (task.kind == "floor" or task.kind == "wall")
   for slot = 1, 16 do
     local d = turtle.getItemDetail(slot)
     if d then
       if not isKeepItem(d.name) then
         turtle.select(slot)
         if not dropFn() then full = true end
-      elseif isFuelItem(d.name) and not isBucket(d.name) then
+      elseif isFuelItem(d.name) and not isBucket(d.name) and not keepAllFuel then
         local unit = pathOf(d.name):find("coal_block") and 9 or 1
         local keep = math.min(d.count, math.max(0, math.floor((64 - fuelKept) / unit)))
         fuelKept = fuelKept + keep * unit

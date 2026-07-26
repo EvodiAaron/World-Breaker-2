@@ -1728,6 +1728,25 @@ check(torchSlots == 1, "the three partial torch stacks were merged into one slot
 check(countInvItem("minecraft:torch") == 17, "no torches lost in the merge (1+4+12)")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
+-- ---------- scenario 57: a build keeps all its fuel, never dumps it ----------
+-- the field bug: floor/wall finished by unloading via the shared unloadInto,
+-- whose one-stack fuel cap (there to stop MINED coal piling up) dumped the
+-- player's own coal-block fuel supply into the chest. A build mines no fuel,
+-- so it must keep every fuel item aboard.
+print("scenario: floor keeps its coal-block fuel instead of unloading it")
+resetWorld()
+addChest(-1, 0, 0)
+inv[1] = { name = "minecraft:stone_bricks", count = 20 }
+inv[2] = { name = "minecraft:coal_block", count = 10 } -- 90 coal-equiv: over the old cap
+runWB2("floor", "3", "1", "1")
+check(countInvItem("minecraft:coal_block") == 10, "all 10 coal blocks kept aboard as fuel")
+local coalInChest = 0
+for _, s in ipairs(containers[key(-1, 0, 0)] or {}) do
+  if s.name == "minecraft:coal_block" then coalInChest = coalInChest + s.count end
+end
+check(coalInChest == 0, "no coal blocks were dumped into the home chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
 -- ---------- summary ----------
 print("")
 if failures == 0 then
