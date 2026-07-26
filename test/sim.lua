@@ -1399,13 +1399,13 @@ end
 check(queuedSent, "queued ack sent immediately, before any movement")
 check(logHas("waiting for the rest of the fleet"), "status shows it is holding for the fleet")
 
--- ---------- scenario 38: water source above a quarry -> dammed with a placed block ----------
--- the water sits over column (1,0): the 2nd cell of a 2x2 footprint, never
--- the home column (0,0) and never the last cell (0,1) - so it survives to
--- be checked (a dam directly on the home/return path would legitimately
--- get dug back out on the way home, same as any other mined block; that's
--- correct behaviour, not a bug, but it makes a bad spot to assert from)
-print("scenario: water source above the quarry is dammed with a carried block (no bucket)")
+-- ---------- scenario 38: water source at the dig target -> dammed, then reclaimed ----------
+-- the water sits over column (1,0): the 2nd cell of a 2x2 footprint. The
+-- turtle plugs it with a carried block (placing into a source destroys the
+-- source), then digs that block straight back - a lone source has no
+-- neighbours to re-flow it, so the excavation is left as clean air instead
+-- of a floating dam block.
+print("scenario: water source at the dig target is dammed then reclaimed to clean air")
 resetWorld()
 fillGround(-3, 5, -3, 5, -4, -1)
 addChest(-1, 0, 0)
@@ -1413,7 +1413,7 @@ world[key(1, 0, 0)] = "minecraft:water" -- source sitting right at the top of th
 inv[1] = { name = "minecraft:cobblestone", count = 10 }
 logClear()
 runWB2("quarry", "2", "2", "3")
-check(world[key(1, 0, 0)] == "minecraft:cobblestone", "water source plugged with a carried dam block")
+check(world[key(1, 0, 0)] == nil, "lone source plugged then reclaimed - no floating dam block left")
 check(not logHas("could not be plugged"), "no fallback triggered - the source was reachable")
 check(logHas("quarry complete"), "quarry ran to completion")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
@@ -1473,8 +1473,8 @@ addChest(-1, 0, 0)
 world[key(1, -3, 0)] = "minecraft:water" -- only reachable once the 2nd 3-layer pass begins
 logClear()
 runWB2("quarry", "2", "2", "6") -- depth 6 = two 3-layer passes over a 2x2 footprint
-check(world[key(1, -3, 0)] == "minecraft:cobblestone",
-  "the source was plugged automatically when the 2nd pass reached it, using mined-and-reserved cobblestone")
+check(world[key(1, -3, 0)] == nil,
+  "the source was plugged with mined-and-reserved cobblestone on the 2nd pass, then reclaimed to air")
 check(not logHas("could not be plugged"), "the source was reachable and handled")
 check(logHas("quarry complete"), "quarry ran to completion")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
@@ -1686,6 +1686,46 @@ check(world[key(0, -1, 0)] == "minecraft:stone_bricks", "cells before it were fi
 check(world[key(2, -1, 0)] == "minecraft:stone_bricks", "cells past it were still filled")
 check(logHas("1 skipped"), "the chest's cell was skipped and reported")
 check(world[key(-1, 0, 0)] == "minecraft:chest", "the home chest is untouched")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 55: ender unload mode finishes without a home chest ----------
+-- the field bug: with UNLOAD_MODE=ender the turtle still tried to unload
+-- into a chest behind home when a task finished, stalling on "no chest
+-- behind home" until a human intervened. It must just use the ender chest.
+print("scenario: a finished quarry in ender mode unloads to the ender chest, no home chest needed")
+resetWorld()
+fillGround(-3, 4, -3, 4, -6, -1, "minecraft:iron_ore") -- loot that must be hauled
+inv[1] = { name = "minecraft:ender_chest", count = 1 } -- portable ender chest aboard
+-- NB: no chest placed behind home at all
+runWB2("set", "UNLOAD_MODE", "ender")
+logClear()
+runWB2("quarry", "2", "2", "2")
+check(logHas("quarry complete"), "quarry finished")
+check(not logHas("no chest behind home"), "never stalled waiting for a home chest")
+check(countInvItem("minecraft:iron_ore") == 0, "all loot was emptied into the ender chest")
+check(countInvItem("minecraft:ender_chest") == 1, "ender chest kept for next time")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 56: partial stacks are consolidated ----------
+-- the field bug: items like torches piled up in several incomplete stacks
+-- (1 here, 4 there, 12 elsewhere); the turtle should merge them
+print("scenario: fragmented stacks of the same item are consolidated")
+resetWorld()
+fillGround(-2, 6, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+inv[3]  = { name = "minecraft:torch", count = 1 }
+inv[6]  = { name = "minecraft:torch", count = 4 }
+inv[9]  = { name = "minecraft:torch", count = 12 }
+runWB2("set", "PLACE_TORCHES", "false")
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "3")
+local torchSlots = 0
+for i = 1, 16 do
+  if inv[i] and inv[i].name == "minecraft:torch" then torchSlots = torchSlots + 1 end
+end
+check(torchSlots == 1, "the three partial torch stacks were merged into one slot")
+check(countInvItem("minecraft:torch") == 17, "no torches lost in the merge (1+4+12)")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------

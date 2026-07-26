@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.18" -- shown on the master's info screen; bump on release
+local VERSION = "1.19" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -435,6 +435,27 @@ local function countItems(matcher)
   return n
 end
 
+-- merge partial stacks of the same item into earlier slots, so the
+-- inventory doesn't silently fill with slivers (torches crafted four at a
+-- time, coal picked up piecemeal, ...) and force needless unload trips
+local function compactInventory()
+  for dst = 1, 15 do
+    local dd = turtle.getItemDetail(dst)
+    if dd and dd.count < 64 then
+      for src = dst + 1, 16 do
+        local ds = turtle.getItemDetail(src)
+        if ds and ds.name == dd.name then
+          turtle.select(src)
+          turtle.transferTo(dst)
+          dd = turtle.getItemDetail(dst)
+          if not dd or dd.count >= 64 then break end
+        end
+      end
+    end
+  end
+  turtle.select(1)
+end
+
 -- throw away junk blocks (tries down, then up, then forward). When
 -- WATER_DAM is on, up to DAM_RESERVE units of whichever dam material the
 -- turtle is holding are kept back instead of junked, so plugging a water
@@ -642,16 +663,38 @@ local function handleWater(dir, d)
   -- neighbours) - so retries force a placed block instead of scooping
   -- again, since a solid block can't be washed away or re-flowed the way
   -- a scooped cell can, and will resolve a pool of any size in one placement.
+  local settled = false
   for _ = 2, cfg.DAM_MAX_ATTEMPTS do
     sleep(1)
     local ok, nd = inspectDir(dir)
-    if not (ok and isWaterName(nd.name)) then return end -- still resolved
+    if not (ok and isWaterName(nd.name)) then settled = true break end -- resolved
     plugWaterSource(dir, false)
   end
-  local ok, nd = inspectDir(dir)
-  if ok and isWaterName(nd.name) then
-    note(("water near %d,%d,%d could not be plugged - leaving it running"):format(pos.x, pos.y, pos.z))
-    task.damSkip[key] = true
+  if not settled then
+    local ok, nd = inspectDir(dir)
+    if ok and isWaterName(nd.name) then
+      note(("water near %d,%d,%d could not be plugged - leaving it running"):format(pos.x, pos.y, pos.z))
+      task.damSkip[key] = true
+      return
+    end
+  end
+
+  -- Reclaim the plug so the excavation isn't littered with floating dam
+  -- blocks: placing a block INTO a water source destroys the source, so
+  -- for a lone source digging the plug straight back leaves clean air (no
+  -- neighbours to re-source it). If water DOES flood back it was part of a
+  -- pool - re-plug and leave that one block in place. Only done for a plug
+  -- at the direct target (hops == 0); a source chased up/down to is left
+  -- alone (it sits outside the cell we were clearing, and the turtle is no
+  -- longer beside it).
+  if hops == 0 then
+    local digBack = (dir == "up" and turtle.digUp)
+                 or (dir == "down" and turtle.digDown) or turtle.dig
+    if digBack() then
+      sleep(1) -- let any neighbouring pool water flow back in before deciding
+      local ok, nd = inspectDir(dir)
+      if ok and isWaterName(nd.name) then plugWaterSource(dir, false) end
+    end
   end
 end
 
@@ -1267,6 +1310,7 @@ local function craftSession()
   end
 
   if swapSide then restoreGear(swapSide) end
+  compactInventory() -- torches/sticks come out of crafting in small stacks
   face(0)
 end
 
@@ -1301,12 +1345,24 @@ local function unloadInto(dropFn)
   return not full
 end
 
+-- forward declaration: goHomeAndUnload uses enderUnload for ender mode,
+-- but enderUnload is defined further down (near the other unload helpers)
+local enderUnload
+
 -- go home, empty into the chest behind the start position, craft if configured
 local function goHomeAndUnload()
   setStatus("returning", ("from %d,%d,%d"):format(pos.x, pos.y, pos.z))
   if not goTo({ x = 0, y = 0, z = 0 }) then
     setStatus("blocked", "could not reach home")
     return false
+  end
+  -- ender-chest mode: dump into the portable ender chest rather than a
+  -- chest behind home. Finishing a task must not stall waiting for a home
+  -- chest the user was never asked to place in this mode.
+  if cfg.UNLOAD_MODE == "ender" and enderUnload() then
+    craftSession()
+    face(0)
+    return true
   end
   face(2) -- chest is behind the start orientation
   local ok, d = turtle.inspect()
@@ -1347,7 +1403,8 @@ local function goHomeAndUnload()
 end
 
 -- place an ender chest below, empty into it, then pick it back up
-local function enderUnload()
+-- (assigned to the forward-declared local above, so goHomeAndUnload can use it)
+function enderUnload()
   local slot = findSlot(isEnderChest)
   if not slot then return false end
   digDownSafe()
@@ -1386,6 +1443,7 @@ end
 -- called between cells; keeps the inventory workable
 local function maintainInventory(returnTarget)
   dropJunk()
+  compactInventory() -- merge partial stacks before deciding we're full
   if freeSlots() >= 2 then return end
   if cfg.UNLOAD_MODE == "ender" and enderUnload() then return end
   if cfg.UNLOAD_MODE == "chest" then
