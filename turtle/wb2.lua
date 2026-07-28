@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.20" -- shown on the master's info screen; bump on release
+local VERSION = "1.21" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -117,7 +117,14 @@ local cfg = {
   SCAN_INTERVAL   = 8,       -- blocks between scans
   STATUS_INTERVAL = 5,       -- seconds between status broadcasts
   ENDER_CHEST     = "enderstorage:ender_storage",
-  FUEL_ITEMS      = { "minecraft:coal", "minecraft:coal_block", "minecraft:lava_bucket" },
+  FUEL_ITEMS      = { "minecraft:coal", "minecraft:coal_block", "minecraft:charcoal",
+                      "minecraft:lava_bucket" },
+  -- fuels from any mod, matched by substring: vanilla/modded charcoal and
+  -- coal coke (Railcraft, Immersive Engineering, ...). These substrings must
+  -- NEVER match plain wood/log/plank/stick - those are crafting stock a
+  -- crafty turtle carries and must not burn (which is exactly why fuel is an
+  -- allow-list and not "anything turtle.refuel accepts")
+  FUEL_MATCH      = { "charcoal", "coke" },
   JUNK            = { "minecraft:cobblestone", "minecraft:stone", "minecraft:dirt",
                       "minecraft:gravel", "minecraft:sand", "minecraft:sandstone",
                       "minecraft:netherrack", "minecraft:grass", "minecraft:flint" },
@@ -348,7 +355,12 @@ local function isLog(name)
 end
 
 local function isFuelItem(name)
-  return listHas(cfg.FUEL_ITEMS, name)
+  if listHas(cfg.FUEL_ITEMS, name) then return true end
+  local p = pathOf(name)
+  for _, sub in ipairs(cfg.FUEL_MATCH) do
+    if p:find(sub, 1, true) then return true end
+  end
+  return false
 end
 
 local function isBucket(name)

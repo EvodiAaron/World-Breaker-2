@@ -76,6 +76,13 @@ machine, easy for the rest.
 Place the turtle facing the area to mine, give it fuel (put coal in its
 inventory — it refuels itself), then:
 
+> Fuels it recognises: coal, blocks of coal, charcoal, coal coke (Railcraft /
+> Immersive Engineering, matched by name), and lava buckets — plus lava it
+> scoops in-world with a carried bucket. Blocks of coal are the most
+> fuel-dense (800 each, stack to 64); a carried bucket + nearby lava is
+> effectively free fuel. Wood/planks are deliberately **not** burned so a
+> crafty turtle keeps its crafting stock.
+
 ```
 wb2                    -- interactive wizard
 wb2 quarry 16 16       -- 16 forward x 16 to-the-right, down to bedrock

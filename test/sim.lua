@@ -107,13 +107,21 @@ function turtle.getItemDetail(n)
   return nil
 end
 function turtle.getFuelLevel() return fuel end
+-- fuel values as ComputerCraft/Forge would report them (burnTime / 20)
+local FUEL_VALUES = {
+  ["minecraft:coal"] = 80, ["minecraft:charcoal"] = 80,
+  ["minecraft:coal_block"] = 800,
+  ["railcraft:coke"] = 160, ["immersiveengineering:coke_block"] = 1600,
+}
 function turtle.refuel(n)
   local s = inv[selected]
-  if s and s.name == "minecraft:coal" then
-    if (n or 1) > 0 then takeSelected() fuel = fuel + 80 end
+  if not s then return false end
+  local per = FUEL_VALUES[s.name]
+  if per then
+    if (n or 1) > 0 then takeSelected() fuel = fuel + per end
     return true
   end
-  if s and s.name == "minecraft:lava_bucket" then
+  if s.name == "minecraft:lava_bucket" then
     if (n or 1) > 0 then
       s.name = "minecraft:bucket" -- the empty bucket stays behind
       fuel = fuel + 1000
@@ -1745,6 +1753,37 @@ for _, s in ipairs(containers[key(-1, 0, 0)] or {}) do
   if s.name == "minecraft:coal_block" then coalInChest = coalInChest + s.count end
 end
 check(coalInChest == 0, "no coal blocks were dumped into the home chest")
+check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
+
+-- ---------- scenario 58: charcoal and modded coke count as fuel ----------
+-- charcoal and coal coke (Railcraft/IE) are valid ComputerCraft fuel but
+-- weren't in FUEL_ITEMS, so the turtle ignored them for refuelling and
+-- would have unloaded them as loot. They're recognised now (coke via a
+-- substring match, so any mod's variant works).
+print("scenario: turtle refuels from charcoal and keeps modded coke as fuel")
+resetWorld()
+fillGround(-2, 12, -1, 1, -3, 2)
+world[key(0, 0, 0)] = nil
+addChest(-1, 0, 0)
+inv[1] = { name = "minecraft:charcoal", count = 20 } -- the only burnable fuel aboard
+inv[2] = { name = "railcraft:coke", count = 5 }       -- modded coke: substring match
+fuel = 12                                             -- forces a refuel almost immediately
+logClear()
+runWB2("set", "STRIP_VEIN", "false")
+runWB2("strip", "8")
+check(countInvItem("minecraft:charcoal") < 20, "turtle burned charcoal for fuel (recognised as fuel)")
+check(fuel > 60, "fuel restored from charcoal above the safety margin")
+local dug58 = true
+for x = 1, 8 do
+  if world[key(x, 0, 0)] or world[key(x, 1, 0)] then dug58 = false end
+end
+check(dug58, "strip completed on charcoal fuel")
+local cokeInChest = 0
+for _, s in ipairs(containers[key(-1, 0, 0)] or {}) do
+  if s.name == "railcraft:coke" then cokeInChest = cokeInChest + s.count end
+end
+check(cokeInChest == 0, "coke was kept as fuel, not dumped into the chest as loot")
+check(countInvItem("railcraft:coke") >= 1, "coke still aboard as a fuel reserve")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home")
 
 -- ---------- summary ----------
