@@ -617,6 +617,24 @@ check(world[key(4, 0, 0)] == "minecraft:torch", "torch placed at interval 4")
 check(world[key(6, 0, 0)] == "minecraft:torch", "torch placed at interval 6")
 check(tpos.x == 0 and tpos.y == 0 and tpos.z == 0, "turtle returned home over its torches")
 
+-- ---------- scenario 3b: strip lit with Quark stone torches ----------
+print("scenario: strip 6 lit with quark:stone_torch (modded torch item)")
+resetWorld()
+fillGround(-2, 10, -3, 3, -3, 2)
+world[key(0, 0, 0)] = nil
+world[key(-1, 0, 0)] = "minecraft:chest"
+inv[16] = { name = "quark:stone_torch", count = 64 }
+
+logClear()
+runWB2("set", "PLACE_TORCHES", "true")
+runWB2("set", "TORCH_INTERVAL", "2")
+runWB2("strip", "6")
+
+check(world[key(2, 0, 0)] == "quark:stone_torch", "stone torch placed at interval 2")
+check(world[key(4, 0, 0)] == "quark:stone_torch", "stone torch placed at interval 4")
+check(world[key(6, 0, 0)] == "quark:stone_torch", "stone torch placed at interval 6")
+check(not logHas("no torches aboard"), "stone torches recognised - no missing-torch warning")
+
 -- ---------- scenario 4: gravel column ----------
 print("scenario: strip through gravel")
 resetWorld()

@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.21" -- shown on the master's info screen; bump on release
+local VERSION = "1.22" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"
@@ -137,6 +137,7 @@ local cfg = {
   ORE_IGNORE      = {},                  -- blocks matching "ore" that should NOT be chased
   EXTRA_LOGS      = {},                  -- crafting logs whose names don't contain "log"
   EXTRA_PLANKS    = {},                  -- crafting planks whose names don't contain "plank"
+  EXTRA_TORCHES   = {},                  -- placeable torches whose names don't end in "torch"
   ALERT_BLOCKS    = { "minecraft:diamond_ore", "minecraft:emerald_ore" }, -- announce these finds
   DAM_BLOCKS      = { "minecraft:cobblestone", "minecraft:dirt",
                       "minecraft:stone", "minecraft:netherrack" }, -- used to plug water sources
@@ -327,7 +328,14 @@ end
 
 -- ================= inventory helpers =================
 
-local function isTorch(name) return name == "minecraft:torch" end
+-- any mod's torch counts for placement (Quark quark:stone_torch, modded
+-- *_torch, ...), but never redstone torches, which barely light a tunnel
+local function isTorch(name)
+  if listHas(cfg.EXTRA_TORCHES, name) then return true end
+  local p = pathOf(name)
+  if p:find("redstone") then return false end
+  return p == "torch" or p:find("_torch$") ~= nil
+end
 local function isEnderChest(name) return name == cfg.ENDER_CHEST or name == "minecraft:ender_chest" end
 -- any mod's placeable chest counts (Quark spruce chests, iron chests,
 -- ...), but never armour ("chestplate") and never ender chests, which

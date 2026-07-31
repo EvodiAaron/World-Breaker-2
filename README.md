@@ -170,6 +170,7 @@ Everything beyond "dig the hole" is an independent toggle:
 ```
 wb2 config                      -- list everything
 wb2 set PLACE_TORCHES true      -- strip mode: torch every TORCH_INTERVAL blocks
+                                --   (vanilla or any mod torch, e.g. quark:stone_torch)
 wb2 set STRIP_VEIN false        -- ore-vein chasing on/off
 wb2 set ORE_SCAN true           -- strip mode: Plethora block-scanner ore homing
 wb2 set DROP_JUNK false         -- keep cobble/dirt/decorative stone (one toggle)
