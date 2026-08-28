@@ -24,14 +24,12 @@
     v  push /wb2.lua to all turtles (over-the-air update)
     Shift+X / Shift+R / Shift+E   stop / recall / resume ALL turtles
 
-  The header shows this modem's estimated wireless range: 64 blocks
-  at ground level, scaled up by this computer's altitude when GPS can
-  supply it (a trailing "+" means no GPS fix yet, so the true range
-  is at least the shown floor; the fix is retried in the background).
-  Wired-only modems show "wired". Ender modems can't be told apart by
-  the API, so one is inferred - and warnings disabled - the moment a
-  turtle reports from beyond the 384-block standard maximum. A turtle
-  within 15% of the limit is drawn in orange as a warning.
+  A turtle within 15% of the estimated wireless range is drawn in
+  orange as a warning. The range is estimated from 64 blocks at ground
+  level, scaled up by this computer's altitude when GPS can supply it;
+  ender modems (inferred once a turtle reports from beyond the 384-block
+  standard maximum) disable the warning. The numeric estimate itself is
+  no longer shown - only the count of turtles sits in the header.
 
   Row markers: * after the state = task paused, ! = the turtle is
   running code with no version stamp (outdated - push with v). The
@@ -122,15 +120,6 @@ local function refreshRange()
   end
 end
 refreshRange()
-
--- header label for what we currently know about the range
-local function rangeLabel(short)
-  if rangeEnder then return short and "inf" or "range: ender (no limit)" end
-  if not haveWireless then return short and "wired" or "range: wired only" end
-  local plus = rangeHasGps and "" or "+" -- no GPS fix: ground-level floor
-  return short and ("~" .. rangeEst .. plus)
-              or ("range ~" .. rangeEst .. "m" .. plus)
-end
 
 -- world-heading unit vectors (E=0, S=1, W=2, N=3), same frame as turtles
 local HDX = { [0] = 1, [1] = 0, [2] = -1, [3] = 0 }
@@ -302,12 +291,16 @@ end
 local monRowMap = {}  -- monitor row -> turtle list index
 local monButtons = {} -- monitor button hitboxes
 
--- pick the largest (most readable) text scale that still fits the whole
--- fleet. Computed from the physical scale-1 grid so it converges without
--- probing (same approach as the Spawner Orchestrator monitor sizing): big
--- 4x4-style monitors get chunky, easy-to-read text while small ones stay
--- dense. setTextScale is only called when the scale actually changes, so a
--- steady screen never flickers, and a monitor resize self-corrects.
+-- pick the largest text scale that still fits the fleet, using the same
+-- method as the Spawner Orchestrator monitors: work out the character grid
+-- this monitor would have at scale 1 (its current size x current scale),
+-- then step down from the biggest scale until that grid is at least
+-- MON_MIN_COLS wide and has a row for every turtle. Keeping MIN_COLS low
+-- lets the text grow big and legible on a 4x4-style panel instead of being
+-- pinned tiny; setTextScale is only called when the scale actually changes,
+-- so a steady screen never flickers and a monitor resize self-corrects.
+local MON_MIN_COLS = 20   -- fleet rows below this are clipped past reading
+local MON_CAP_SCALE = 3   -- keep text from getting comically large
 local monScale = 0.5
 local function fitMonitorScale()
   if not monitor then return end
@@ -315,11 +308,12 @@ local function fitMonitorScale()
   if not ok or type(w) ~= "number" then return end
   local w1, h1 = w * monScale, h * monScale   -- grid this monitor has at scale 1
   local needRows = 8 + #order                 -- chrome + a line per turtle
-  local s = 3                                  -- cap: readable without being huge
+  local s = 5                                  -- start at the largest, step down
   while s > 0.5 do
-    if math.floor(w1 / s) >= 40 and math.floor(h1 / s) >= needRows then break end
+    if math.floor(w1 / s) >= MON_MIN_COLS and math.floor(h1 / s) >= needRows then break end
     s = s - 0.5
   end
+  if s > MON_CAP_SCALE then s = MON_CAP_SCALE end
   if s ~= monScale then
     monScale = s
     pcall(monitor.setTextScale, s)
@@ -361,9 +355,11 @@ local function drawMonitor()
     end
 
     -- how much room the bottom chrome needs: separator + 3 notes lines +
-    -- one or two rows of command buttons (large monitors get a second row)
-    local wide = w >= 40
-    local twoRows = wide and h >= 16
+    -- one or two rows of command buttons. When the text is scaled up big
+    -- the grid is narrow, so word buttons give way to single letters and
+    -- the fleet-wide second row only appears once its words fit (~39 cols).
+    local wide = w >= 35        -- room for the 4-button word core
+    local twoRows = w >= 39 and h >= 16
     local bottomLimit = h - (4 + (twoRows and 2 or 1))
 
     local row = 2
@@ -429,17 +425,17 @@ local function drawMonitor()
       { label = "Orient", ch = "o" }, { label = "StopAll", ch = "X" },
       { label = "RtnAll", ch = "R" }, { label = "ResAll", ch = "E" },
     }
-    if not wide then
+    if twoRows then
+      drawButtons(h - 1, perTurtle, monButtons)
+      drawButtons(h, fleet, monButtons)
+    elseif wide then
+      drawButtons(h, perTurtle, monButtons)
+    else
       drawButtons(h, {
         { label = "R", ch = "r" }, { label = "E", ch = "e" },
         { label = "X", ch = "x" }, { label = "A", ch = "a" },
         { label = "P", ch = "p" },
       }, monButtons)
-    elseif twoRows then
-      drawButtons(h - 1, perTurtle, monButtons)
-      drawButtons(h, fleet, monButtons)
-    else
-      drawButtons(h, perTurtle, monButtons)
     end
   end)
   term.redirect(prev)
@@ -460,8 +456,8 @@ local function draw()
   else
     write(isColor and "World Breaker 2 - Master (touch)" or "World Breaker 2 - Master")
   end
-  local count = compact and ("t:" .. #order .. " " .. rangeLabel(true))
-             or ("turtles: " .. #order .. "  " .. rangeLabel(false))
+  local count = compact and ("t:" .. #order)
+             or ("turtles: " .. #order)
   term.setCursorPos(w - #count + 1, 1)
   write(count)
   setColor(colors.gray)
@@ -651,7 +647,7 @@ local function infoScreen()
   local dist = turtles[id].dist
   if dist then
     setColor(nearRangeEdge(turtles[id]) and colors.orange or colors.lightGray)
-    print(("distance from master: %dm (%s)"):format(dist, rangeLabel(false)))
+    print(("distance from master: %dm"):format(dist))
   end
   if st.version then
     setColor(colors.lightGray)

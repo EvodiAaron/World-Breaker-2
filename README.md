@@ -294,17 +294,14 @@ and a plan-view map of the current quarry layer redraw as fresh statuses
 arrive. Turtles announce `ALERT_BLOCKS` finds (diamonds/emeralds by
 default) as they happen.
 
-The header shows this modem's **estimated wireless range**, factoring in
-height and modem type: 64 blocks at ground level, scaled up by the
-master's altitude when GPS can supply it (a trailing `+` means no GPS fix
-yet — the real range is *at least* the shown floor, and the master keeps
-retrying in the background in case the constellation comes up late).
-Wired-only setups show `wired`. **Ender modems are detected
-automatically**: the API can't distinguish one, so the first time a
-turtle reports from beyond the 384-block standard-modem maximum the
-header switches to `range: ender (no limit)` and proximity warnings turn
-off. Otherwise, a turtle that reports from within 15% of the limit turns
-**orange** in the list — it's about to walk out of contact.
+The master still **estimates this modem's wireless range** in the
+background — 64 blocks at ground level, scaled up by the master's altitude
+when GPS can supply it — but the number is no longer shown; the header
+just carries the turtle count. **Ender modems are detected automatically**
+(the API can't distinguish one, so the first time a turtle reports from
+beyond the 384-block standard-modem maximum the proximity warnings turn
+off). Otherwise, a turtle that reports from within 15% of the estimated
+limit turns **orange** in the list — it's about to walk out of contact.
 
 Fleet controls (keyboard only):
 
@@ -377,13 +374,17 @@ Optional peripherals, auto-detected on the master:
   wired modems): a wall dashboard mirroring the whole fleet under a
   coloured **World Breaker Fleet** heading bar — one row plus progress bar
   per turtle, recent alerts, and command buttons at the bottom. The text
-  **auto-scales to the monitor**, so a big 4x4 panel shows large, readable
-  rows instead of the old postage-stamp print. On an **advanced** (gold)
-  monitor, tap a row to select that turtle and tap **Return / Resume /
-  Stop / Abort / Ping** to command it directly from the wall; large
-  monitors add a second button row — **Orient** (GPS re-orient) plus
-  fleet-wide **StopAll / RtnAll / ResAll** — so you can run the whole
-  fleet from the wall without walking back to the computer. Actions that
+  **auto-scales to the monitor** (the same way the Spawner Orchestrator
+  sizes its displays), so a big 4x4 panel shows large, readable rows
+  instead of the old postage-stamp print — the more turtles reporting, the
+  smaller the text drops so they all still fit. On an **advanced** (gold)
+  monitor, tap a row to select that turtle and tap the command buttons to
+  drive it from the wall: **Return / Resume / Stop / Abort / Ping**. When
+  the grid is wide enough (a bigger panel, or a busy fleet shown at
+  smaller text) a second button row appears — **Orient** (GPS re-orient)
+  plus fleet-wide **StopAll / RtnAll / ResAll** — so you can run the whole
+  fleet from the wall without walking back to the computer; when the text
+  is scaled up large the buttons condense to single letters. Actions that
   need typing (modes, config, quarry sizes) stay on the master's own
   screen — monitors have no keyboard.
 
