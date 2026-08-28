@@ -374,12 +374,18 @@ Optional peripherals, auto-detected on the master:
   ore find, a low *bass* note the moment one needs attention (out of fuel,
   chest full, blocked, error).
 - **Monitor** (any size, place it against the computer or connect with
-  wired modems): a wall dashboard mirroring the whole fleet — one row plus
-  progress bar per turtle, recent alerts, and a row of command buttons at
-  the bottom. On an **advanced** (gold) monitor, tap a row to select that
-  turtle and tap **Return / Resume / Stop / Abort / Ping** to command it
-  directly from the wall. Actions that need typing (modes, config, quarry
-  sizes) stay on the master's own screen — monitors have no keyboard.
+  wired modems): a wall dashboard mirroring the whole fleet under a
+  coloured **World Breaker Fleet** heading bar — one row plus progress bar
+  per turtle, recent alerts, and command buttons at the bottom. The text
+  **auto-scales to the monitor**, so a big 4x4 panel shows large, readable
+  rows instead of the old postage-stamp print. On an **advanced** (gold)
+  monitor, tap a row to select that turtle and tap **Return / Resume /
+  Stop / Abort / Ping** to command it directly from the wall; large
+  monitors add a second button row — **Orient** (GPS re-orient) plus
+  fleet-wide **StopAll / RtnAll / ResAll** — so you can run the whole
+  fleet from the wall without walking back to the computer. Actions that
+  need typing (modes, config, quarry sizes) stay on the master's own
+  screen — monitors have no keyboard.
 
 Range note: normal wireless modems reach ~64 blocks at ground level, up to
 ~384 when both ends are high in the sky, and less during storms. For serious

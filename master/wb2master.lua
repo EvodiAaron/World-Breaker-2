@@ -54,10 +54,14 @@
   Optional peripherals, auto-detected:
     speaker  - chimes when a turtle reports an ore find, low bass
                when one needs attention (waiting/blocked/error)
-    monitor  - mirrors the fleet list on a wall display. On an advanced
+    monitor  - mirrors the fleet list on a wall display under a coloured
+               heading bar. Text auto-scales to the monitor's size, so a
+               big 4x4 panel shows large, readable rows. On an advanced
                monitor, tap a row to select a turtle and tap the
-               Return/Resume/Stop/Abort/Ping buttons to command it;
-               actions that need typing stay on the master's screen
+               Return/Resume/Stop/Abort/Ping buttons to command it; large
+               monitors add a second button row (GPS orient plus fleet-wide
+               stop / recall / resume) so the whole fleet can be run from
+               the wall. Actions that need typing stay on the master's screen
 ============================================================ ]]--
 
 local PROTO_STATUS = "wb2status"
@@ -82,6 +86,9 @@ end
 local speaker = peripheral.find("speaker")
 local monitor = peripheral.find("monitor")
 if monitor then pcall(function() monitor.setTextScale(0.5) end) end
+-- coloured heading bar for the wall monitor, matching the Spawner
+-- Orchestrator menu header (blue bar, contrasting text)
+local HEADER_BG, HEADER_FG = colors.blue, colors.white
 
 -- Estimated wireless range: standard modems reach 64 blocks at ground
 -- level, growing linearly above y=96 to 384 at the build limit; storms
@@ -294,8 +301,34 @@ end
 -- stays on the master's own screen, because monitors have no keyboard.
 local monRowMap = {}  -- monitor row -> turtle list index
 local monButtons = {} -- monitor button hitboxes
+
+-- pick the largest (most readable) text scale that still fits the whole
+-- fleet. Computed from the physical scale-1 grid so it converges without
+-- probing (same approach as the Spawner Orchestrator monitor sizing): big
+-- 4x4-style monitors get chunky, easy-to-read text while small ones stay
+-- dense. setTextScale is only called when the scale actually changes, so a
+-- steady screen never flickers, and a monitor resize self-corrects.
+local monScale = 0.5
+local function fitMonitorScale()
+  if not monitor then return end
+  local ok, w, h = pcall(monitor.getSize)
+  if not ok or type(w) ~= "number" then return end
+  local w1, h1 = w * monScale, h * monScale   -- grid this monitor has at scale 1
+  local needRows = 8 + #order                 -- chrome + a line per turtle
+  local s = 3                                  -- cap: readable without being huge
+  while s > 0.5 do
+    if math.floor(w1 / s) >= 40 and math.floor(h1 / s) >= needRows then break end
+    s = s - 0.5
+  end
+  if s ~= monScale then
+    monScale = s
+    pcall(monitor.setTextScale, s)
+  end
+end
+
 local function drawMonitor()
   if not monitor then return end
+  fitMonitorScale()
   local prev = term.redirect(monitor)
   pcall(function()
     local w, h = term.getSize()
@@ -303,18 +336,39 @@ local function drawMonitor()
     monButtons = {}
     term.setBackgroundColor(colors.black)
     term.clear()
-    term.setCursorPos(1, 1)
-    setColor(colors.yellow)
-    write("World Breaker 2 - fleet")
+    -- coloured full-width heading bar (matches the Spawner Orchestrator
+    -- menu style): centred title, turtle count parked on the right
+    local title = "World Breaker Fleet"
     local count = #order .. " turtle" .. (#order == 1 and "" or "s")
-    term.setCursorPos(math.max(1, w - #count + 1), 1)
-    write(count)
-    setColor(colors.gray)
-    term.setCursorPos(1, 2)
-    write(string.rep("-", w))
-    local row = 3
+    local monColor = term.isColor and term.isColor()
+    if monColor then
+      term.setBackgroundColor(HEADER_BG)
+      term.setTextColor(HEADER_FG)
+    else
+      setColor(colors.yellow)
+    end
+    term.setCursorPos(1, 1)
+    term.clearLine()
+    term.setCursorPos(math.max(1, math.floor((w - #title) / 2) + 1), 1)
+    write(title:sub(1, w))
+    if w >= #title + #count + 2 then
+      term.setCursorPos(w - #count + 1, 1)
+      write(count)
+    end
+    if monColor then
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colors.white)
+    end
+
+    -- how much room the bottom chrome needs: separator + 3 notes lines +
+    -- one or two rows of command buttons (large monitors get a second row)
+    local wide = w >= 40
+    local twoRows = wide and h >= 16
+    local bottomLimit = h - (4 + (twoRows and 2 or 1))
+
+    local row = 2
     for i, id in ipairs(order) do
-      if row > h - 5 then break end
+      if row > bottomLimit then break end
       local t = turtles[id]
       local st = t.status
       local offline = (os.clock() - t.last) > STALE_AFTER
@@ -334,7 +388,7 @@ local function drawMonitor()
       monRowMap[row] = i
       row = row + 1
       local pct = taskPct(st.task)
-      if pct and row <= h - 5 then
+      if pct and row <= bottomLimit then
         term.setCursorPos(3, row)
         setColor(colors.lime)
         write(bar(pct, math.min(w - 12, 30)))
@@ -348,27 +402,44 @@ local function drawMonitor()
       write("Waiting for turtle broadcasts...")
     end
     setColor(colors.gray)
-    term.setCursorPos(1, h - 4)
+    term.setCursorPos(1, bottomLimit + 1)
     write(string.rep("-", w))
     setColor(colors.lightGray)
     for i = 1, 3 do
-      term.setCursorPos(1, h - 4 + i)
+      term.setCursorPos(1, bottomLimit + 1 + i)
       if notes[i] then write(notes[i]:sub(1, w)) end
     end
     -- command buttons for the selected turtle (tap on advanced monitors);
-    -- prompt-driven actions are terminal-only, so they are not offered
-    if w >= 44 then
-      drawButtons(h, {
-        { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
-        { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
-        { label = "Ping", ch = "p" },
-      }, monButtons)
-    else
+    -- prompt-driven actions are terminal-only, so they are not offered.
+    -- Large monitors get a second row of hands-off controls - GPS orient
+    -- plus fleet-wide stop / recall / resume - so a whole fleet can be
+    -- managed from the wall without walking to the computer. Widths account
+    -- for the "x:" prefix drawn on buttons whose hotkey isn't in the label
+    -- (Stop -> "x:Stop"), so the full 5-button row needs ~44 columns while
+    -- the 4-button core fits the ~40 a scale-1 4x4 monitor provides.
+    local perTurtle = (w >= 44) and {
+      { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
+      { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
+      { label = "Ping", ch = "p" },
+    } or {
+      { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
+      { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
+    }
+    local fleet = {
+      { label = "Orient", ch = "o" }, { label = "StopAll", ch = "X" },
+      { label = "RtnAll", ch = "R" }, { label = "ResAll", ch = "E" },
+    }
+    if not wide then
       drawButtons(h, {
         { label = "R", ch = "r" }, { label = "E", ch = "e" },
         { label = "X", ch = "x" }, { label = "A", ch = "a" },
         { label = "P", ch = "p" },
       }, monButtons)
+    elseif twoRows then
+      drawButtons(h - 1, perTurtle, monButtons)
+      drawButtons(h, fleet, monButtons)
+    else
+      drawButtons(h, perTurtle, monButtons)
     end
   end)
   term.redirect(prev)
