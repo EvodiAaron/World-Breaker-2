@@ -40,7 +40,7 @@ if not turtle then
   return
 end
 
-local VERSION = "1.24" -- shown on the master's info screen; bump on release
+local VERSION = "1.25" -- shown on the master's info screen; bump on release
 
 local PROTO_STATUS = "wb2status"
 local PROTO_CMD    = "wb2cmd"

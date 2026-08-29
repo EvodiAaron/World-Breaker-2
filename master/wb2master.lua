@@ -291,6 +291,43 @@ end
 local monRowMap = {}  -- monitor row -> turtle list index
 local monButtons = {} -- monitor button hitboxes
 
+-- the full command set offered on the monitor: per-turtle actions first,
+-- then the fleet-wide broadcasts. Always drawn as whole words - never
+-- abbreviated to single letters - and wrapped across as many rows as the
+-- monitor is tall enough for (see planButtonRows), so a big panel spends
+-- its space on readable controls instead of cramming them onto one line.
+local MON_BTN_DEFS = {
+  { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
+  { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
+  { label = "Ping", ch = "p" },
+  { label = "Orient", ch = "o" }, { label = "StopAll", ch = "X" },
+  { label = "RtnAll", ch = "R" }, { label = "ResAll", ch = "E" },
+}
+
+-- greedily pack the button defs into rows that each fit within w columns,
+-- keeping their order. Measures each button exactly as drawButtons draws
+-- it (label + the "x:" prefix added when the hotkey isn't in the label, +
+-- the brackets and a trailing space).
+local function planButtonRows(defs, w)
+  local function dw(def)
+    local label = def.label
+    if not label:lower():find(def.ch:lower(), 1, true) then label = def.ch .. ":" .. label end
+    return #label + 3
+  end
+  local rows, cur, curw = {}, {}, 0
+  for _, def in ipairs(defs) do
+    local width = dw(def)
+    if #cur > 0 and curw + width > w then
+      rows[#rows + 1] = cur
+      cur, curw = {}, 0
+    end
+    cur[#cur + 1] = def
+    curw = curw + width
+  end
+  if #cur > 0 then rows[#rows + 1] = cur end
+  return rows
+end
+
 -- pick the largest text scale that still fits the fleet, using the same
 -- method as the Spawner Orchestrator monitors: work out the character grid
 -- this monitor would have at scale 1 (its current size x current scale),
@@ -300,7 +337,8 @@ local monButtons = {} -- monitor button hitboxes
 -- pinned tiny; setTextScale is only called when the scale actually changes,
 -- so a steady screen never flickers and a monitor resize self-corrects.
 local MON_MIN_COLS = 20   -- fleet rows below this are clipped past reading
-local MON_CAP_SCALE = 3   -- keep text from getting comically large
+local MON_CAP_SCALE = 1.5 -- comfortable ceiling: bigger than this looks bloated
+                          -- and eats the columns the word buttons need
 local monScale = 0.5
 local function fitMonitorScale()
   if not monitor then return end
@@ -354,13 +392,14 @@ local function drawMonitor()
       term.setTextColor(colors.white)
     end
 
-    -- how much room the bottom chrome needs: separator + 3 notes lines +
-    -- one or two rows of command buttons. When the text is scaled up big
-    -- the grid is narrow, so word buttons give way to single letters and
-    -- the fleet-wide second row only appears once its words fit (~39 cols).
-    local wide = w >= 35        -- room for the 4-button word core
-    local twoRows = w >= 39 and h >= 16
-    local bottomLimit = h - (4 + (twoRows and 2 or 1))
+    -- lay the full word-button set out across however many rows this width
+    -- needs, then reserve the bottom chrome: those button rows + 3 notes
+    -- lines + a separator. On a narrow (big-text) panel the buttons simply
+    -- wrap onto more rows rather than shrinking to letters, but never so
+    -- many that the fleet list is squeezed out.
+    local btnRows = planButtonRows(MON_BTN_DEFS, w)
+    local nbtn = math.min(#btnRows, math.max(1, h - 4 - 3))
+    local bottomLimit = h - (4 + nbtn)
 
     local row = 2
     for i, id in ipairs(order) do
@@ -405,37 +444,13 @@ local function drawMonitor()
       term.setCursorPos(1, bottomLimit + 1 + i)
       if notes[i] then write(notes[i]:sub(1, w)) end
     end
-    -- command buttons for the selected turtle (tap on advanced monitors);
-    -- prompt-driven actions are terminal-only, so they are not offered.
-    -- Large monitors get a second row of hands-off controls - GPS orient
-    -- plus fleet-wide stop / recall / resume - so a whole fleet can be
-    -- managed from the wall without walking to the computer. Widths account
-    -- for the "x:" prefix drawn on buttons whose hotkey isn't in the label
-    -- (Stop -> "x:Stop"), so the full 5-button row needs ~44 columns while
-    -- the 4-button core fits the ~40 a scale-1 4x4 monitor provides.
-    local perTurtle = (w >= 44) and {
-      { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
-      { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
-      { label = "Ping", ch = "p" },
-    } or {
-      { label = "Return", ch = "r" }, { label = "Resume", ch = "e" },
-      { label = "Stop", ch = "x" }, { label = "Abort", ch = "a" },
-    }
-    local fleet = {
-      { label = "Orient", ch = "o" }, { label = "StopAll", ch = "X" },
-      { label = "RtnAll", ch = "R" }, { label = "ResAll", ch = "E" },
-    }
-    if twoRows then
-      drawButtons(h - 1, perTurtle, monButtons)
-      drawButtons(h, fleet, monButtons)
-    elseif wide then
-      drawButtons(h, perTurtle, monButtons)
-    else
-      drawButtons(h, {
-        { label = "R", ch = "r" }, { label = "E", ch = "e" },
-        { label = "X", ch = "x" }, { label = "A", ch = "a" },
-        { label = "P", ch = "p" },
-      }, monButtons)
+    -- command buttons for the fleet (tap on advanced monitors); prompt-
+    -- driven actions are terminal-only, so they are not offered. Per-turtle
+    -- actions come first, then the fleet-wide broadcasts - all as full words,
+    -- bottom-anchored across the rows planned above, so the whole fleet can
+    -- be run from the wall without touching the computer.
+    for ri = 1, nbtn do
+      drawButtons(bottomLimit + 4 + ri, btnRows[ri], monButtons)
     end
   end)
   term.redirect(prev)

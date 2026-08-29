@@ -376,15 +376,15 @@ Optional peripherals, auto-detected on the master:
   per turtle, recent alerts, and command buttons at the bottom. The text
   **auto-scales to the monitor** (the same way the Spawner Orchestrator
   sizes its displays), so a big 4x4 panel shows large, readable rows
-  instead of the old postage-stamp print — the more turtles reporting, the
-  smaller the text drops so they all still fit. On an **advanced** (gold)
-  monitor, tap a row to select that turtle and tap the command buttons to
-  drive it from the wall: **Return / Resume / Stop / Abort / Ping**. When
-  the grid is wide enough (a bigger panel, or a busy fleet shown at
-  smaller text) a second button row appears — **Orient** (GPS re-orient)
-  plus fleet-wide **StopAll / RtnAll / ResAll** — so you can run the whole
-  fleet from the wall without walking back to the computer; when the text
-  is scaled up large the buttons condense to single letters. Actions that
+  instead of the old postage-stamp print — capped at a comfortable size so
+  it never bloats, and dropping back down only when a busy fleet needs the
+  room. On an **advanced** (gold) monitor, tap a row to select that turtle
+  and tap the command buttons to drive the fleet from the wall: per-turtle
+  **Return / Resume / Stop / Abort / Ping**, then fleet-wide **Orient**
+  (GPS re-orient) and **StopAll / RtnAll / ResAll**. The buttons are always
+  spelled out in full — on a narrower panel they simply **wrap onto more
+  rows** rather than shrinking to cryptic letters — so the whole fleet can
+  be run from the wall without walking back to the computer. Actions that
   need typing (modes, config, quarry sizes) stay on the master's own
   screen — monitors have no keyboard.
 
