@@ -331,14 +331,17 @@ end
 -- pick the largest text scale that still fits the fleet, using the same
 -- method as the Spawner Orchestrator monitors: work out the character grid
 -- this monitor would have at scale 1 (its current size x current scale),
--- then step down from the biggest scale until that grid is at least
--- MON_MIN_COLS wide and has a row for every turtle. Keeping MIN_COLS low
--- lets the text grow big and legible on a 4x4-style panel instead of being
--- pinned tiny; setTextScale is only called when the scale actually changes,
--- so a steady screen never flickers and a monitor resize self-corrects.
-local MON_MIN_COLS = 20   -- fleet rows below this are clipped past reading
-local MON_CAP_SCALE = 1.5 -- comfortable ceiling: bigger than this looks bloated
-                          -- and eats the columns the word buttons need
+-- then choose a scale. The trap to avoid: when only a few turtles are
+-- reporting there's nothing to force the text down, so it balloons to fill
+-- the panel and dwarfs a content-dense display like the Spawner Orchestrator
+-- (which is small only because ~20 items pack its screen). So width acts as
+-- a CEILING on the text - we never enlarge past the point where the grid
+-- would drop below MON_MIN_COLS columns (that keeps a 4x4 at the same tidy
+-- scale-1 density Spawner shows) - and we only shrink FURTHER, below that,
+-- when a big fleet genuinely needs the extra rows. setTextScale is called
+-- only when the scale changes, so a steady screen never flickers.
+local MON_MIN_COLS = 34   -- don't grow text past this column count (a 4x4
+                          -- lands on scale 1, matching a packed Spawner panel)
 local monScale = 0.5
 local function fitMonitorScale()
   if not monitor then return end
@@ -346,12 +349,17 @@ local function fitMonitorScale()
   if not ok or type(w) ~= "number" then return end
   local w1, h1 = w * monScale, h * monScale   -- grid this monitor has at scale 1
   local needRows = 8 + #order                 -- chrome + a line per turtle
-  local s = 5                                  -- start at the largest, step down
-  while s > 0.5 do
+  -- largest scale (down to 1) whose grid still clears MON_MIN_COLS; width
+  -- alone never shrinks the text below scale 1
+  local s = 5
+  while s > 1 do
     if math.floor(w1 / s) >= MON_MIN_COLS and math.floor(h1 / s) >= needRows then break end
     s = s - 0.5
   end
-  if s > MON_CAP_SCALE then s = MON_CAP_SCALE end
+  -- only a fleet too tall to fit at this scale pushes it below 1
+  while s > 0.5 and math.floor(h1 / s) < needRows do
+    s = s - 0.5
+  end
   if s ~= monScale then
     monScale = s
     pcall(monitor.setTextScale, s)
